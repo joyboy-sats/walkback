@@ -22,6 +22,7 @@ import { and, desc, eq, lte } from "drizzle-orm";
 import { adjudicate } from "./adjudicate";
 import { getDb, schema } from "./db";
 import { writeMemoriesBulk, type MemoryWrite } from "./memwal";
+import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
 import { computeScore, type ScoreSnapshot } from "./score";
 import { NS } from "./types";
@@ -164,6 +165,8 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
         failures.map((f) => f.error).join("; "),
     );
   }
+
+  await logMemories(writes, results);
 
   await db.insert(schema.resolutions).values({
     claimId: claim.id,

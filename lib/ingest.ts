@@ -24,6 +24,7 @@ import "server-only";
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "./db";
 import { extractClaims } from "./extract";
+import { logMemories } from "./memory-log";
 import { writeMemoriesBulk } from "./memwal";
 import { claimMemory, sourceMemory } from "./memory-text";
 import { getBalance } from "./tatum";
@@ -214,6 +215,9 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
       const w = batch[i];
       if (ns === NS.claim && w) claimBlobByKey.set(w.idempotencyKey, r.blobId);
     });
+
+    // Record in the projection so the Memory Explorer can show every blob.
+    await logMemories(batch, results);
   }
 
   // Backfill blob ids onto the claim rows so the UI can link to the blob and

@@ -13,7 +13,10 @@
     "seed": "tsx scripts/seed.ts",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   },
   "dependencies": {
     "@mysten-incubation/memwal": "0.1.8",
