@@ -93,3 +93,20 @@ export function computeScore(hits: number, misses: number): ScoreSnapshot {
     band: trustBand(score, adjudicated),
   };
 }
+
+/**
+ * Fold one verdict into a score.
+ *
+ * `void` is not a miss. A claim we could not check leaves hits, misses and the
+ * bound exactly where they were. Callers must use this rather than treating a
+ * failed check as `false`.
+ */
+export function applyOutcome(
+  hits: number,
+  misses: number,
+  outcome: "true" | "false" | "void",
+): ScoreSnapshot {
+  if (outcome === "void") return computeScore(hits, misses);
+  if (outcome === "true") return computeScore(hits + 1, misses);
+  return computeScore(hits, misses + 1);
+}

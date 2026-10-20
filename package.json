@@ -10,7 +10,10 @@
   "scripts": {
     "smoke": "tsx scripts/smoke.ts",
     "typecheck": "tsc --noEmit",
-    "seed": "tsx scripts/seed.ts",
+    "seed": "node --conditions=react-server --import tsx scripts/seed.ts",
+    "api": "node --conditions=react-server --import tsx backend/server.ts",
+    "worker": "node --conditions=react-server --import tsx backend/worker.ts",
+    "db:migrate": "tsx backend/migrate-cli.ts",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",

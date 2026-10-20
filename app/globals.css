@@ -18,3 +18,22 @@ body {
 }
 
 .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+.pending-bar {
+  height: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.pending-bar > span {
+  display: block;
+  height: 100%;
+  width: 35%;
+  background: var(--dim);
+  animation: pending-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes pending-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}

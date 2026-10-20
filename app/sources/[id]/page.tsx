@@ -5,10 +5,36 @@
  * source's score 0.48 and not something else?" Every point of the score has to
  * be traceable to a verdict, and every verdict to a claim and its evidence.
  */
-import { asc, desc, eq } from "drizzle-orm";
 import { notFound } from "next/navigation";
-import { getDb, schema } from "@/lib/db";
+import { ApiError, apiGet } from "@/lib/public-api";
 import { MIN_SAMPLE, TRUST_MUTED, trustBand } from "@/lib/score";
+
+interface SourceDetail {
+  source: {
+    id: string;
+    handle: string;
+    score: number;
+    hits: number;
+    misses: number;
+  };
+  versions: Array<{ version: number; score: number }>;
+  claims: Array<{
+    claim: {
+      id: string;
+      quote: string;
+      claimType: string;
+      deadline: string;
+      synthetic: boolean;
+      walrusBlobId: string | null;
+    };
+    resolution: {
+      outcome: "true" | "false" | "void";
+      reason: string;
+      evidence: unknown;
+      walrusBlobId: string | null;
+    } | null;
+  }>;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -18,32 +44,16 @@ export default async function SourcePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const db = getDb();
+  let detail: SourceDetail;
+  try {
+    detail = await apiGet<SourceDetail>(`/sources/${id}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) notFound();
+    const message = err instanceof Error ? err.message : String(err);
+    return <p className="text-sm text-[var(--bad)]">{message}</p>;
+  }
 
-  const [source] = await db
-    .select()
-    .from(schema.sources)
-    .where(eq(schema.sources.id, id))
-    .limit(1);
-
-  if (!source) notFound();
-
-  const versions = await db
-    .select()
-    .from(schema.scoreVersions)
-    .where(eq(schema.scoreVersions.sourceId, id))
-    .orderBy(asc(schema.scoreVersions.version));
-
-  const claims = await db
-    .select({
-      claim: schema.claims,
-      resolution: schema.resolutions,
-    })
-    .from(schema.claims)
-    .leftJoin(schema.resolutions, eq(schema.resolutions.claimId, schema.claims.id))
-    .where(eq(schema.claims.sourceId, id))
-    .orderBy(desc(schema.claims.deadline))
-    .limit(50);
+  const { source, versions, claims } = detail;
 
   const adjudicated = source.hits + source.misses;
   const band = trustBand(source.score, adjudicated);
@@ -126,11 +136,16 @@ export default async function SourcePage({
                         : "text-[var(--void)]"
                 }
               >
-                {resolution ? resolution.outcome.toUpperCase() : "PENDING"}
+                {!resolution
+                  ? "PENDING"
+                  : resolution.outcome === "void"
+                    ? "COULD NOT CHECK"
+                    : resolution.outcome.toUpperCase()}
               </span>
               <span className="text-[var(--dim)]">{claim.claimType}</span>
+              {claim.synthetic && <span className="text-[var(--void)]">synthetic</span>}
               <span className="ml-auto mono text-[var(--void)]">
-                {claim.deadline.toISOString().slice(0, 10)}
+                {claim.deadline.slice(0, 10)}
               </span>
             </div>
 

@@ -1,8 +1,12 @@
 /**
  * Postgres client — the queryable projection.
  *
- * Uses a lazy singleton so importing this module never opens a connection at
- * build time (Next.js prerendering would poison the build with a live socket).
+ * Uses the `postgres` package (postgres.js), a standard Postgres driver.
+ * The database is Postgres on the Coolify private network. There is no Neon
+ * driver and no Neon-only API. A normal `postgres://` URL works, including
+ * one that is not reachable from the public internet.
+ *
+ * Lazy singleton: importing this module never opens a connection at build time.
  */
 import "server-only";
 

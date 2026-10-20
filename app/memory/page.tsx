@@ -8,28 +8,37 @@
  * count the memories and see that they exist on mainnet, not just that the app
  * claims to have written them.
  */
-import { desc } from "drizzle-orm";
-import { getDb, schema } from "@/lib/db";
-import { listNamespaces } from "@/lib/memwal";
+import { apiGet } from "@/lib/public-api";
+import RebuildButton from "./rebuild-button";
+
+interface MemoryView {
+  rows: Array<{
+    id: string;
+    kind: string;
+    namespace: string;
+    blobId: string;
+    textPreview: string;
+  }>;
+  namespaces: Array<{ name: string; memoryCount: number; storageUsed: number }>;
+  nsError: string | null;
+  limitation: string;
+}
 
 export const dynamic = "force-dynamic";
 
 export default async function MemoryPage() {
-  const db = getDb();
-
-  const rows = await db
-    .select()
-    .from(schema.memoryLog)
-    .orderBy(desc(schema.memoryLog.writtenAt))
-    .limit(200);
-
-  let namespaces: Awaited<ReturnType<typeof listNamespaces>> = [];
-  let nsError: string | null = null;
+  let view: MemoryView | null = null;
+  let loadError: string | null = null;
   try {
-    namespaces = await listNamespaces();
+    view = await apiGet<MemoryView>("/memory");
   } catch (err) {
-    nsError = err instanceof Error ? err.message : String(err);
+    loadError = err instanceof Error ? err.message : String(err);
   }
+
+  const rows = view?.rows ?? [];
+  const namespaces = view?.namespaces ?? [];
+  const nsError = view?.nsError ?? null;
+  const limitation = view?.limitation ?? "";
 
   const byKind = rows.reduce<Record<string, number>>((acc, r) => {
     acc[r.kind] = (acc[r.kind] ?? 0) + 1;
@@ -48,6 +57,21 @@ export default async function MemoryPage() {
       </div>
 
       <section className="border border-[var(--line)] rounded-lg p-4">
+        <h2 className="text-sm text-[var(--dim)]">rebuild the projection</h2>
+        <p className="mt-2 text-sm max-w-2xl">
+          Drops the five Postgres tables and writes them again from the memories
+          on Walrus. Scores are recomputed from verdicts. A void still does not
+          count.
+        </p>
+        {loadError ? (
+          <p className="mt-2 text-sm text-[var(--bad)]">{loadError}</p>
+        ) : (
+          <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">{limitation}</p>
+        )}
+        <RebuildButton />
+      </section>
+
+      <section className="mt-4 border border-[var(--line)] rounded-lg p-4">
         <h2 className="text-sm text-[var(--dim)]">on the relayer</h2>
         {nsError ? (
           <p className="mt-2 text-sm text-[var(--bad)]">{nsError}</p>

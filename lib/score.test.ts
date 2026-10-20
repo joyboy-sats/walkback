@@ -3,6 +3,7 @@ import {
   MIN_SAMPLE,
   TRUST_MUTED,
   TRUST_TRUSTED,
+  applyOutcome,
   computeScore,
   hitRate,
   trustBand,
@@ -106,5 +107,17 @@ describe("computeScore", () => {
     const s = computeScore(2, 0);
     expect(s.band).toBe("unknown");
     expect(s.hitRate).toBe(1);
+  });
+});
+
+describe("applyOutcome", () => {
+  it("leaves the score untouched on a void", () => {
+    const before = computeScore(4, 1);
+    expect(applyOutcome(before.hits, before.misses, "void")).toEqual(before);
+  });
+
+  it("counts a hit and a miss, and nothing else", () => {
+    expect(applyOutcome(4, 1, "true")).toEqual(computeScore(5, 1));
+    expect(applyOutcome(4, 1, "false")).toEqual(computeScore(4, 2));
   });
 });

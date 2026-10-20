@@ -1,0 +1,112 @@
+{
+  "note": "Every post in this file is a synthetic placeholder. Replace them with real posts collected during the hackathon. A real post omits synthetic (or sets it to false). Real posts have to be the majority before the demo. See the README section 'Adding claims'.",
+  "posts": [
+    {
+      "id": "placeholder-alpha-balance",
+      "synthetic": true,
+      "handle": "placeholder_alpha",
+      "platform": "x",
+      "published_at": "2026-10-01T12:00:00.000Z",
+      "sui_address": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. I hold at least 1 SUI.",
+      "snapshot": {
+        "address": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "asset": "0x2::sui::SUI",
+        "balance": "1000000000",
+        "asOf": "2026-10-01T12:00:00.000Z"
+      },
+      "claims": [
+        {
+          "quote": "I hold at least 1 SUI.",
+          "claim_type": "balance_threshold",
+          "params": {
+            "address": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "asset": "0x2::sui::SUI",
+            "direction": "gte",
+            "amount": "1000000000"
+          },
+          "deadline": "2026-12-01T00:00:00.000Z",
+          "confidence": 0.95
+        }
+      ]
+    },
+    {
+      "id": "placeholder-beta-change",
+      "synthetic": true,
+      "handle": "placeholder_beta",
+      "platform": "x",
+      "published_at": "2026-10-02T12:00:00.000Z",
+      "sui_address": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. I'm adding 2 SUI by December.",
+      "snapshot": {
+        "address": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "asset": "0x2::sui::SUI",
+        "balance": "5000000000",
+        "checkpoint": "0",
+        "asOf": "2026-10-02T12:00:00.000Z"
+      },
+      "claims": [
+        {
+          "quote": "I'm adding 2 SUI by December.",
+          "claim_type": "balance_change_since_ingest",
+          "params": {
+            "address": "0x2222222222222222222222222222222222222222222222222222222222222222",
+            "asset": "0x2::sui::SUI",
+            "direction": "gte",
+            "amount": "2000000000"
+          },
+          "deadline": "2026-12-15T00:00:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "placeholder-gamma-replay",
+      "synthetic": true,
+      "handle": "placeholder_gamma",
+      "platform": "onchain",
+      "published_at": "2026-10-03T12:00:00.000Z",
+      "sui_address": "0x3333333333333333333333333333333333333333333333333333333333333333",
+      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. This address received at least 5 SUI between 1 Sep and 15 Sep 2026.",
+      "snapshot": null,
+      "claims": [
+        {
+          "quote": "This address received at least 5 SUI between 1 Sep and 15 Sep 2026.",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-09-01T00:00:00.000Z",
+            "until": "2026-09-15T00:00:00.000Z",
+            "direction": "gte",
+            "amount": "5000000000"
+          },
+          "deadline": "2026-12-20T00:00:00.000Z",
+          "confidence": 0.92
+        }
+      ]
+    },
+    {
+      "id": "placeholder-delta-price",
+      "synthetic": true,
+      "handle": "placeholder_delta",
+      "platform": "substack",
+      "published_at": "2026-10-04T12:00:00.000Z",
+      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. SUI will be above $3 by December.",
+      "claims": [
+        {
+          "quote": "SUI will be above $3 by December.",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "gte",
+            "amount": "3"
+          },
+          "deadline": "2026-12-31T00:00:00.000Z",
+          "confidence": 0.88
+        }
+      ]
+    }
+  ]
+}

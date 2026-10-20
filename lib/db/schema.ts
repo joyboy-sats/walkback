@@ -19,6 +19,7 @@ import {
   jsonb,
   boolean,
   index,
+  uniqueIndex,
   real,
   pgEnum,
 } from "drizzle-orm/pg-core";
@@ -99,12 +100,23 @@ export const claims = pgTable(
     status: claimStatusEnum("status").notNull().default("pending"),
     /** Extraction confidence, kept for auditing the extractor itself. */
     confidence: real("confidence").notNull().default(0),
+    /**
+     * Demo fallback. Real posts leave this false. The feed and the memory
+     * text both surface it so a synthetic row cannot be mistaken for evidence.
+     */
+    synthetic: boolean("synthetic").notNull().default(false),
+    /**
+     * Stable id from `data/claims.json` (`post:{id}:{index}`). Null for claims
+     * pasted through the UI. Re-running the seed looks this up and skips.
+     */
+    externalId: text("external_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     walrusBlobId: text("walrus_blob_id"),
   },
   (t) => [
     index("claims_status_deadline_idx").on(t.status, t.deadline),
     index("claims_source_idx").on(t.sourceId),
+    uniqueIndex("claims_external_id_uidx").on(t.externalId),
   ],
 );
 
@@ -177,8 +189,45 @@ export const memoryLog = pgTable(
   ],
 );
 
+export const jobKindEnum = pgEnum("job_kind", [
+  "ingest",
+  "rebuild",
+  "resolve",
+  "restore",
+]);
+
+export const jobStatusEnum = pgEnum("job_status", [
+  "queued",
+  "running",
+  "done",
+  "error",
+]);
+
+/**
+ * Work the Coolify API accepts and the worker performs.
+ *
+ * Walrus writes take seconds. The HTTP request only inserts a row; the worker
+ * claims it with SKIP LOCKED and runs it. The UI polls `GET /jobs/:id`.
+ */
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    kind: jobKindEnum("kind").notNull(),
+    status: jobStatusEnum("status").notNull().default("queued"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    result: jsonb("result").$type<Record<string, unknown>>(),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (t) => [index("jobs_status_created_idx").on(t.status, t.createdAt)],
+);
+
 export type Source = typeof sources.$inferSelect;
 export type Claim = typeof claims.$inferSelect;
 export type Resolution = typeof resolutions.$inferSelect;
 export type ScoreVersion = typeof scoreVersions.$inferSelect;
 export type MemoryLogRow = typeof memoryLog.$inferSelect;
+export type Job = typeof jobs.$inferSelect;

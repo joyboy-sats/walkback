@@ -5,11 +5,31 @@
  * wrong is *visible as demoted*, and one that is below the mute threshold is
  * collapsed rather than shown normally.
  *
- * Server component; reads straight from the projection.
+ * Server component. The rows come from the Coolify API; this process has no
+ * database connection.
  */
-import { desc, eq } from "drizzle-orm";
-import { getDb, schema } from "@/lib/db";
+import { apiGet } from "@/lib/public-api";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
+
+interface FeedRow {
+  claim: {
+    id: string;
+    quote: string;
+    claimType: string;
+    status: string;
+    deadline: string;
+    synthetic: boolean;
+    walrusBlobId: string | null;
+  };
+  source: {
+    id: string;
+    handle: string;
+    score: number;
+    hits: number;
+    misses: number;
+    muted: boolean;
+  };
+}
 
 export const dynamic = "force-dynamic";
 
@@ -31,17 +51,13 @@ function bandLabel(score: number, adjudicated: number): {
 }
 
 export default async function FeedPage() {
-  const db = getDb();
-
-  const rows = await db
-    .select({
-      claim: schema.claims,
-      source: schema.sources,
-    })
-    .from(schema.claims)
-    .innerJoin(schema.sources, eq(schema.claims.sourceId, schema.sources.id))
-    .orderBy(desc(schema.sources.score), desc(schema.claims.deadline))
-    .limit(100);
+  let rows: FeedRow[] = [];
+  let loadError: string | null = null;
+  try {
+    rows = await apiGet<FeedRow[]>("/feed");
+  } catch (err) {
+    loadError = err instanceof Error ? err.message : String(err);
+  }
 
   const muted = rows.filter((r) => !r.source.muted);
   const hidden = rows.length - muted.length;
@@ -58,9 +74,11 @@ export default async function FeedPage() {
         </p>
       </div>
 
-      {muted.length === 0 ? (
+      {loadError ? (
+        <p className="text-sm text-[var(--bad)]">{loadError}</p>
+      ) : muted.length === 0 ? (
         <p className="text-[var(--dim)]">
-          No claims yet. Ingest a post to start the ledger.
+          No claims yet. <a href="/ingest" className="underline">Ingest a post</a> to start the ledger.
         </p>
       ) : (
         <ul className="space-y-3">
@@ -88,7 +106,7 @@ export default async function FeedPage() {
                     </span>
                   )}
                   <span className="ml-auto text-xs text-[var(--dim)] mono">
-                    due {claim.deadline.toISOString().slice(0, 10)}
+                    due {claim.deadline.slice(0, 10)}
                   </span>
                 </div>
 
@@ -98,6 +116,11 @@ export default async function FeedPage() {
 
                 <div className="mt-3 flex items-center gap-3 text-xs text-[var(--dim)]">
                   <span className="pill">{claim.claimType}</span>
+                  {claim.synthetic && (
+                    <span className="border border-[var(--line)] rounded px-1.5 py-0.5 text-[var(--void)]">
+                      synthetic
+                    </span>
+                  )}
                   <span className={claim.status === "resolved" ? "text-[var(--good)]" : ""}>
                     {claim.status}
                   </span>

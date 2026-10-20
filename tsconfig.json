@@ -34,6 +34,7 @@
   "include": [
     "scripts/**/*.ts",
     "lib/**/*.ts",
+    "backend/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "next.config.ts",

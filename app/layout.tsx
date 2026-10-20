@@ -18,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <span className="text-sm text-[var(--dim)]">we keep the receipts</span>
           <nav className="ml-auto flex gap-5 text-sm text-[var(--dim)]">
             <a href="/" className="hover:text-[var(--fg)]">Feed</a>
+            <a href="/ingest" className="hover:text-[var(--fg)]">Ingest</a>
             <a href="/memory" className="hover:text-[var(--fg)]">Memory</a>
           </nav>
         </header>

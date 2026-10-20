@@ -41,13 +41,17 @@ function payload(o: Record<string, unknown>): string {
 
 export function sourceMemory(
   source: SourceRef,
-  meta: { createdAt: string },
+  meta: { createdAt: string; synthetic?: boolean },
 ): { text: string; key: string } {
   const addr = source.suiAddress ? `, address ${source.suiAddress}` : "";
+  const syntheticLine = meta.synthetic
+    ? `SYNTHETIC demo source, not a real account. Do not treat its record as evidence. `
+    : "";
   return {
     key: `source:${source.id}`,
     text:
       `SOURCE ${source.handle} was added to Walkback on ${meta.createdAt.slice(0, 10)}. ` +
+      `${syntheticLine}` +
       `Platform: ${source.platform}${addr}. ` +
       `Walkback will extract checkable claims this source makes about onchain ` +
       `state and adjudicate them against Sui mainnet at their deadlines. ` +
@@ -59,6 +63,7 @@ export function sourceMemory(
         platform: source.platform,
         sui_address: source.suiAddress ?? null,
         created_at: meta.createdAt,
+        synthetic: meta.synthetic === true,
       }),
   };
 }
@@ -76,6 +81,7 @@ export function claimMemory(
   },
   extracted: ExtractedClaim,
   snapshot: BalanceSnapshot | null,
+  opts?: { synthetic?: boolean; externalId?: string },
 ): { text: string; key: string } {
   const snapLine = snapshot
     ? `At ingest, ${snapshot.address} held ${snapshot.balance} base units of ` +
@@ -85,11 +91,16 @@ export function claimMemory(
     : `No snapshot was taken at ingest, so any claim about a change over time ` +
       `will resolve to void rather than be guessed.`;
 
+  const syntheticLine = opts?.synthetic
+    ? `SYNTHETIC demo fallback — this is not a real post and must not be counted as evidence. `
+    : "";
+
   return {
     key: `claim:${claim.id}`,
     text:
       `CLAIM from ${claim.sourceHandle}, due ${claim.deadline.slice(0, 10)}: ` +
       `"${clip(extracted.quote)}"\n\n` +
+      `${syntheticLine}` +
       `Recorded as a ${claim.claimType} claim with ${claim.confidence.toFixed(2)} ` +
       `extraction confidence. ${snapLine}\n\n` +
       payload({
@@ -102,6 +113,8 @@ export function claimMemory(
         quote: clip(extracted.quote),
         confidence: claim.confidence,
         snapshot,
+        synthetic: opts?.synthetic === true,
+        ...(opts?.externalId ? { external_id: opts.externalId } : {}),
       }),
   };
 }

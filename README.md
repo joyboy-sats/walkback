@@ -14,14 +14,15 @@ Smart Agents for Real Life).
 
 ## Status
 
-Early scaffold. The identity model, memory layer and adjudication contract are
-settled; the Next.js app is not built yet.
+The UI, the Coolify API, and the worker are in place. Live writes still need
+the owner's credentials on Coolify; nothing in this repo contains a key.
 
 What works today:
 
 - `npm run smoke` — proves the Walrus Memory mainnet delegate key works end to
   end (health → write → recall) and prints the delegate public key you need for
   the submission form.
+- `npm run test`, `npm run typecheck`, `npm run build`.
 
 ## Why the design looks like this
 
@@ -43,7 +44,7 @@ the system has two layers with different jobs:
 
 | Layer | Holds | Role |
 |---|---|---|
-| Postgres (Neon) | queryable projection: sources, claims, resolutions, score versions | fast reads for the UI |
+| Postgres on Coolify (private) | queryable projection: sources, claims, resolutions, score versions, jobs | fast reads for the UI |
 | Walrus Memory (mainnet) | every claim, verdict and score version, as narrative text | **system of record** |
 
 `restore()` rebuilds the projection from Walrus. That path exists specifically
@@ -95,6 +96,126 @@ From **memory.walrus.xyz** → SDK credentials:
 `npm run smoke` prints it.
 
 From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
+
+## Adding claims
+
+`npm run seed` reads `data/claims.json` and runs each post through the same
+ingest path as the app. Real posts are the dataset. The file in the repo is a
+placeholder so the shape is obvious: every entry has `"synthetic": true`, the
+handles start with `placeholder_`, and the text says so. Synthetic claims are
+labelled in the feed, on the source page, and in the memory text, and the seed
+summary counts them separately from real ones. The script warns when synthetic
+posts are not a minority. Replace the placeholders before the demo.
+
+A real post:
+
+```json
+{
+  "id": "alice-2026-10-18-balance",
+  "handle": "alice",
+  "platform": "x",
+  "published_at": "2026-10-18T15:04:00.000Z",
+  "sui_address": "0x…",
+  "text": "the post, verbatim",
+  "snapshot": {
+    "address": "0x…",
+    "asset": "0x2::sui::SUI",
+    "balance": "123000000000",
+    "asOf": "2026-10-18T15:04:05.000Z"
+  }
+}
+```
+
+Leave `synthetic` off. `id` is a stable slug: re-running the seed finds it and
+does not write the post again. Use a new handle for a real source. A
+placeholder handle already has a source memory, and memory is append-only, so
+that first synthetic memory is the one recall will keep finding. Omit `claims` and the model extracts them from
+`text`. For a historical transfer, set `claims` yourself with
+`"claim_type": "tx_replay"` and `since` / `until` in the params, so the window
+is the one you mean. A `snapshot` recorded when you collected the post is the
+receipt for `balance_change_since_ingest`. Sui cannot answer what the balance
+was then, so a change claim without that receipt cannot be checked later.
+`"snapshot": null` means there is no receipt and the seed will not call Tatum
+to invent one. Omit `snapshot` to read the live balance at seed time.
+
+Run the seed on Coolify, where `DATABASE_URL` and the provider keys exist. It
+needs the Walrus delegate key, and — only for posts that omit `claims` or
+`snapshot` — `AI_GATEWAY_API_KEY` and `TATUM_API_KEY`. The summary prints
+memory counts per namespace, every blob id, and the score of each source.
+
+```bash
+npm run seed
+```
+
+## Deployment
+
+Vercel serves the UI. It never opens Postgres. Coolify runs three things on
+the private network: the API, the worker, and Postgres.
+
+The API is a small Node server in `backend/`, not a second copy of the Next.js
+app. The Next routes on Vercel only proxy writes. If those routes imported the
+database client, a Vercel deploy would need `DATABASE_URL` and the provider
+keys, which it cannot have. One image (`Dockerfile` at the repo root) runs
+both Coolify services; the start command is the only difference.
+
+| Service | Where | Start | Port |
+|---|---|---|---|
+| Frontend | Vercel | `npm run build` / `npm start` | Vercel |
+| API | Coolify | image default: `node --conditions=react-server --import tsx backend/server.ts` | **8080**, health `GET /health` |
+| Worker | Coolify | same image, command `node --conditions=react-server --import tsx backend/worker.ts` | none |
+| Postgres | Coolify | internal service | 5432, not public |
+
+`--conditions=react-server` is required. The database client imports
+`server-only`, which throws under plain Node.
+
+The API applies `drizzle/` on boot (`backend/migrate.ts`, postgres.js). The
+worker does the same. `npm run db:migrate` is the same migrator for a one-off.
+Do not point it at a public database.
+
+Reads (`GET /feed`, `GET /sources/:id`, `GET /memory`, `GET /jobs/:id`) are
+open. The browser and the Next server call them at `NEXT_PUBLIC_API_URL`.
+Writes (`POST /ingest`, `POST /rebuild`, `POST /resolve`, `POST /restore`)
+require `Authorization: Bearer <API_SHARED_SECRET>`. The browser posts to
+same-origin `/api/*`; the Next server attaches the bearer token. The secret
+is the one value that exists on both Vercel and Coolify, and it is never
+inlined into the client. CORS reflects `CORS_ORIGIN` only.
+
+A job row is the queue. The API returns `{ jobId }` immediately. The worker
+claims one row at a time. The UI polls `GET /jobs/:id`.
+
+### Env vars on Vercel
+
+| Variable | Notes |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | Public origin of the Coolify API, no trailing path. Set before `next build`. Not a credential. |
+| `API_SHARED_SECRET` | Server-only. Same string as on the API. At least 16 characters. Never `NEXT_PUBLIC_`. |
+
+### Env vars on the Coolify API
+
+| Variable | Notes |
+|---|---|
+| `PORT` | `8080` |
+| `DATABASE_URL` | `postgres://…@<coolify-postgres-host>:5432/walkback` — the internal hostname |
+| `API_SHARED_SECRET` | Same value as Vercel |
+| `CORS_ORIGIN` | The Vercel origin, for example `https://walkback.vercel.app`. Comma-separated if you have more than one |
+| `MEMWAL_ACCOUNT_ID` | `0x` + 64 hex |
+| `MEMWAL_PRIVATE_KEY` | Delegate private key |
+| `MEMWAL_SERVER_URL` | `https://relayer.memory.walrus.xyz` |
+| `TATUM_API_KEY` | From the Tatum dashboard |
+| `TATUM_SUI_RPC_URL` | `https://sui-mainnet.gateway.tatum.io` |
+| `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` |
+| `AI_GATEWAY_API_KEY` | Claim extraction |
+| `DEMO_MODE` | `live` |
+
+### Env vars on the Coolify worker
+
+Same image. Set the start command to the worker line above. Give it
+`DATABASE_URL`, `MEMWAL_ACCOUNT_ID`, `MEMWAL_PRIVATE_KEY`, `MEMWAL_SERVER_URL`,
+`TATUM_API_KEY`, `TATUM_SUI_RPC_URL`, `TATUM_RATE_URL`, `AI_GATEWAY_API_KEY`,
+and `DEMO_MODE`. `WORKER_POLL_MS` defaults to `2000`. The worker does not read
+`API_SHARED_SECRET` or `CORS_ORIGIN`.
+
+Seed is a one-off with the worker's environment: `npm run seed`.
 
 ## Known open questions
 

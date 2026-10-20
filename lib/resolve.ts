@@ -24,7 +24,7 @@ import { getDb, schema } from "./db";
 import { writeMemoriesBulk, type MemoryWrite } from "./memwal";
 import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
-import { computeScore, type ScoreSnapshot } from "./score";
+import { applyOutcome, computeScore, type ScoreSnapshot } from "./score";
 import { NS } from "./types";
 import type { ClaimParams, ClaimType, BalanceSnapshot } from "./types";
 
@@ -93,13 +93,7 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
 
   // A void never moves the score, so it does not produce a score version.
   const before = computeScore(source.hits, source.misses);
-  const after =
-    verdict.outcome === "void"
-      ? before
-      : computeScore(
-          source.hits + (verdict.outcome === "true" ? 1 : 0),
-          source.misses + (verdict.outcome === "false" ? 1 : 0),
-        );
+  const after = applyOutcome(source.hits, source.misses, verdict.outcome);
 
   const writes: MemoryWrite[] = [];
 
