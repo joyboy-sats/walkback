@@ -11,6 +11,7 @@
     "smoke": "tsx scripts/smoke.ts",
     "typecheck": "tsc --noEmit",
     "seed": "node --conditions=react-server --import tsx scripts/seed.ts",
+    "list:memories": "node --conditions=react-server --import tsx scripts/list-memories.ts",
     "api": "node --conditions=react-server --import tsx server/index.ts",
     "worker": "node --conditions=react-server --import tsx worker/index.ts",
     "check:vercel": "tsx scripts/check-vercel-boundary.ts",

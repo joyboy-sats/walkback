@@ -20,6 +20,7 @@ interface ScoreRow {
 
 interface VerifyResponse {
   mode?: "verify" | "rebuild";
+  enumeration?: "list" | "recall-fallback";
   truncated?: boolean;
   warning?: string | null;
   limitation?: string;
@@ -69,7 +70,7 @@ export default function RebuildButton() {
   async function run(mode: "verify" | "rebuild") {
     if (mode === "rebuild") {
       const ok = window.confirm(
-        "Replace the Postgres projection with what recall returned? This drops the current tables. Do it only after the coverage report is complete.",
+        "Replace the Postgres projection with the listed memories? This drops the current tables. Do it only after the coverage report is complete.",
       );
       if (!ok) return;
     }
@@ -133,7 +134,7 @@ export default function RebuildButton() {
       </div>
       <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">
         Verify is the demo. It does not drop tables. Replace stays off until a verify report
-        says every product namespace came back in full.
+        says every listed product-namespace memory was read. A recall fallback cannot turn it on.
       </p>
 
       {phase === "working" && (
@@ -160,7 +161,7 @@ export default function RebuildButton() {
 function Report({ result }: { result: VerifyResponse }) {
   const headline =
     result.mode === "rebuild" && result.truncated
-      ? "Projection replaced with what recall returned."
+      ? "Projection replaced from the listed memories."
       : result.mode === "rebuild"
         ? "Projection was not replaced."
         : "Verification finished. Postgres was not modified.";
@@ -176,9 +177,12 @@ function Report({ result }: { result: VerifyResponse }) {
         <Count label="only in recall" value={result.recalledNotInPostgres ?? 0} />
       </dl>
       <p className="mt-3 text-xs text-[var(--void)] max-w-2xl">
-        Missing from recall means those Postgres rows were not in the memories recall returned.
-        Recall is not a full listing, so those rows can still be on Walrus.
-        {result.coverage ? ` ${result.coverage.unique} unique memories from ${result.coverage.rawHits} hits.` : ""}
+        {result.enumeration === "recall-fallback"
+          ? "Listing was unavailable. This is a recall sample, so a missing row can still be on Walrus. Replace stays off."
+          : result.coverageComplete
+            ? "Every listed product memory was read. A missing row is not in that inventory."
+            : "Coverage is incomplete, so a missing row can still be on Walrus."}
+        {result.coverage ? ` ${result.coverage.unique} memories with plaintext from ${result.coverage.rawHits} recall hits.` : ""}
         {result.coverageComplete ? " Product-namespace coverage is complete." : " Product-namespace coverage is not complete."}
         {result.excludedNamespaces && result.excludedNamespaces.length > 0
           ? ` Excluded namespaces: ${result.excludedNamespaces.join(", ")}.`
@@ -188,7 +192,7 @@ function Report({ result }: { result: VerifyResponse }) {
         <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
           {result.coverage.gaps.map((g) => (
             <li key={g.namespace}>
-              {g.namespace}: recalled {g.recalled} of {g.reported}
+              {g.namespace}: plaintext for {g.recalled} of {g.reported} listed
             </li>
           ))}
         </ul>

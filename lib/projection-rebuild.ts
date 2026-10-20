@@ -6,43 +6,48 @@
  * resolutions and score versions. Trust is recomputed from verdicts with
  * `computeScore`; a stored score that disagrees with the verdicts loses.
  *
- * `recall` is similarity search, not `SELECT *`. There is no cursor, no
- * filter, and no "give me every row" call. `restore()` rebuilds the relayer's
- * vector index and returns counts, not plaintext, and the SDK documents that
- * even `truncated: false` is not proof every on-chain blob was seen. The
- * practical consequence:
+ * The inventory is `GET /v1/owners/:owner/memories`, paged until `has_more`
+ * is false. That payload is metadata. Plaintext comes from `recall()` and is
+ * matched to the listed blob ids (the relayer's only decrypting read, capped
+ * at 100 hits per namespace). Coverage is complete when every live product
+ * blob id has text and recall did not add blob ids the list did not have.
+ * Replace (TRUNCATE + rebuild) runs only then, and only after confirm.
  *
- *   1. Each namespace is queried several times, with a large limit and both
- *      sort modes, and hits are deduped on `blob_id`. Order is never trusted.
- *   2. The unique count per namespace is compared with `listNamespaces`.
- *   3. If recall returned fewer memories than the relayer has indexed, or
- *      returned nothing, or the counts could not be read, the projection is
- *      left untouched. Truncating on a partial read would destroy the only
- *      structured copy of the ledger.
- *
- * A complete enumeration needs an API this SDK does not have: list-by-
- * namespace returning plaintext, or a cursor on `restore` that yields text.
- * Until that exists, a rebuild at demo scale (tens of memories, limit well
- * above the namespace size) can succeed, and a rebuild that cannot prove it
- * saw everything refuses.
+ * If that route is missing, the older multi-query recall sample is the
+ * report. It is marked `recall-fallback` and cannot replace the projection.
  */
 import "server-only";
 
 import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
 import { computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
+import {
+  contentPlan,
+  finishInventory,
+  isListUnavailable,
+  type HydratedText,
+  type InventoryAssessment,
+  type ListWalkResult,
+} from "./memory-list";
 
 /** Large on purpose. Demo namespaces are tens of memories, not thousands. */
 export const RECALL_LIMIT = 200;
 
-export const RECALL_ENUMERATION_LIMIT =
-  "recall is top-K similarity search, not a listing. A memory that exists on " +
-  "Walrus can be absent from this report. matched / mismatched / missing-from-recall " +
-  "compare what recall returned with Postgres. missing-from-recall means recall did " +
-  "not surface the row; it does not mean Walrus lacks it. listNamespaces counts for " +
-  "walkback.smoke and walkback.timing are excluded. maxDistance is not set, because " +
-  "the SDK applies it client-side and a tight cap would drop hits. The projection " +
-  "is replaced only when product-namespace coverage is complete and replace is confirmed.";
+export const LIST_ENUMERATION_NOTE =
+  "Verify pages GET /v1/owners/:owner/memories until has_more is false. That list is metadata " +
+  "(blob id, namespace, tombstones), so plaintext is loaded with recall() and matched to those " +
+  "blob ids. Coverage is exact: every live product-namespace blob id must come back with text, " +
+  "and recall must not add blob ids the list did not have. The relayer decrypts at most 100 hits " +
+  "per recall, so a larger namespace stays incomplete. walkback.smoke and walkback.timing are " +
+  "excluded. Replace runs only when that coverage is complete and replace is confirmed. If the " +
+  "list route is missing, the report is a marked recall sample and Replace stays off.";
+
+/** @deprecated Use LIST_ENUMERATION_NOTE. Kept so older imports still compile. */
+export const RECALL_ENUMERATION_LIMIT = LIST_ENUMERATION_NOTE;
+
+export const RECALL_FALLBACK_NOTE =
+  "Listing was unavailable (this relayer has no GET /v1/owners/:owner/memories). " +
+  "The figures below are a recall sample, not a full inventory. Replace stays off.";
 
 /** Namespaces written by scripts/smoke.ts and scripts/timing.ts. Not product data. */
 export const EXCLUDED_NAMESPACES = ["walkback.smoke", "walkback.timing"] as const;
@@ -494,7 +499,14 @@ export function rebuildAllowed(input: {
   mode: "verify" | "rebuild";
   confirm: boolean;
   coverageComplete: boolean;
+  enumeration?: "list" | "recall-fallback";
 }): { truncate: boolean; reason: string } {
+  if (input.enumeration === "recall-fallback") {
+    return {
+      truncate: false,
+      reason: "the list route was unavailable, so the recall fallback cannot replace the projection",
+    };
+  }
   if (input.mode !== "rebuild") {
     return { truncate: false, reason: "verify reads Walrus and leaves Postgres as it is" };
   }
@@ -668,6 +680,8 @@ export function compareWithStored(input: {
 
 export interface ProjectionReport {
   mode: "verify" | "rebuild";
+  /** `list` paged the inventory. `recall-fallback` means that route was missing. */
+  enumeration: "list" | "recall-fallback";
   truncated: boolean;
   warning: string | null;
   limitation: string;
@@ -704,11 +718,222 @@ export interface ProjectionReport {
  * never truncates. `rebuild` replaces the projection only when coverage of the
  * product namespaces is complete and `confirm` is set.
  */
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function emptyCoverage(): ProjectionReport["coverage"] {
+  return { rawHits: 0, unique: 0, byNamespace: {}, reported: {}, gaps: [] };
+}
+
+function unfinishedReport(input: {
+  mode: "verify" | "rebuild";
+  enumeration: "list" | "recall-fallback";
+  warning: string;
+  limitation: string;
+}): ProjectionReport {
+  return {
+    mode: input.mode,
+    enumeration: input.enumeration,
+    truncated: false,
+    warning: input.warning,
+    limitation: input.limitation,
+    notes: [],
+    matched: 0,
+    mismatched: 0,
+    missingFromRecall: 0,
+    recalledNotInPostgres: 0,
+    mismatches: [],
+    missing: [],
+    scores: [],
+    coverageComplete: false,
+    excludedNamespaces: [],
+    duplicatesDropped: 0,
+    skipped: [],
+    counts: { sources: 0, claims: 0, resolutions: 0, scoreVersions: 0, memoryLog: 0 },
+    coverage: emptyCoverage(),
+  };
+}
+
+async function finishReport(input: {
+  mode: "verify" | "rebuild";
+  confirm: boolean;
+  enumeration: "list" | "recall-fallback";
+  limitation: string;
+  assessment: InventoryAssessment;
+  rawHits: number;
+  extraNotes: string[];
+  duplicatesDropped?: number;
+  stored: {
+    sources: StoredSourceRow[];
+    claims: StoredClaimRow[];
+    resolutions: StoredResolutionRow[];
+  };
+}): Promise<ProjectionReport> {
+  const gathered = input.assessment.memories.map((memory) => ({
+    blobId: memory.blobId,
+    text: memory.text,
+    namespace: memory.namespace,
+    ...(memory.createdAt ? { createdAt: memory.createdAt } : {}),
+  }));
+  const projection = projectMemories(gathered);
+  const comparison = compareWithStored({
+    recalled: projection,
+    sources: input.stored.sources,
+    claims: input.stored.claims,
+    resolutions: input.stored.resolutions,
+  });
+  const allowed = rebuildAllowed({
+    mode: input.mode,
+    confirm: input.confirm,
+    coverageComplete: input.assessment.coverageComplete,
+    enumeration: input.enumeration,
+  });
+  if (allowed.truncate) await applyProjection(projection);
+
+  const warning = [
+    input.assessment.warning,
+    input.mode === "verify" ? allowed.reason : allowed.truncate ? null : allowed.reason,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" ");
+
+  const notes = comparison.notes.filter((note) => !note.includes("does not mean Walrus lacks it"));
+  if (input.enumeration === "list" && input.assessment.coverageComplete) {
+    notes.push("Every listed product memory was read. A row missing here is not in that inventory.");
+  } else if (input.enumeration === "list") {
+    notes.push("Coverage is incomplete, so a row missing from this report may still be on Walrus.");
+  } else {
+    notes.push("Listing was unavailable. These figures are a recall sample, not a full inventory.");
+  }
+
+  return {
+    mode: input.mode,
+    enumeration: input.enumeration,
+    truncated: allowed.truncate,
+    warning: warning || null,
+    limitation: input.limitation,
+    notes: [...notes, ...projection.notes, ...input.extraNotes],
+    matched: comparison.matched,
+    mismatched: comparison.mismatched,
+    missingFromRecall: comparison.missingFromRecall,
+    recalledNotInPostgres: comparison.recalledNotInPostgres,
+    mismatches: comparison.mismatches,
+    missing: comparison.missing,
+    scores: comparison.scores,
+    coverageComplete: input.enumeration === "list" && input.assessment.coverageComplete,
+    excludedNamespaces: input.assessment.excludedNamespaces,
+    duplicatesDropped: projection.duplicatesDropped + (input.duplicatesDropped ?? 0),
+    skipped: projection.skipped,
+    counts: {
+      sources: projection.sources.length,
+      claims: projection.claims.length,
+      resolutions: projection.resolutions.length,
+      scoreVersions: projection.scoreVersions.length,
+      memoryLog: projection.memoryLog.length,
+    },
+    coverage: {
+      rawHits: input.rawHits,
+      unique: input.assessment.memories.length,
+      byNamespace: input.assessment.hydratedByNamespace,
+      reported: input.assessment.listedByNamespace,
+      gaps: input.assessment.gaps,
+    },
+  };
+}
+
+async function hydrateListed(
+  walk: ListWalkResult,
+): Promise<{ texts: HydratedText[]; rawHits: number; hydrationError?: string }> {
+  const { recallMemory } = await import("./memwal");
+  const { memwalReadLimiter } = await import("./ratelimit");
+  const plan = contentPlan({
+    memories: walk.memories,
+    deleted: walk.deleted,
+    productNamespaces: Object.values(NS),
+  });
+  const texts: HydratedText[] = [];
+  let rawHits = 0;
+  for (const query of plan) {
+    try {
+      await memwalReadLimiter.acquire();
+      const hits = await recallMemory({
+        query: query.query,
+        namespace: query.namespace as Namespace,
+        limit: query.limit,
+        sort: query.sort,
+      });
+      for (const hit of hits) {
+        rawHits += 1;
+        texts.push({
+          blobId: hit.blobId,
+          text: hit.text,
+          namespace: query.namespace,
+          ...(hit.createdAt ? { createdAt: hit.createdAt } : {}),
+        });
+      }
+    } catch (err) {
+      return {
+        texts,
+        rawHits,
+        hydrationError: `plaintext recall failed (${errorMessage(err)}). The projection was not modified.`,
+      };
+    }
+  }
+  return { texts, rawHits };
+}
+
 export async function rebuildProjection(opts?: {
   mode?: "verify" | "rebuild";
   confirm?: boolean;
 }): Promise<ProjectionReport> {
   const mode = opts?.mode === "rebuild" ? "rebuild" : "verify";
+  const confirm = opts?.confirm === true;
+  const { listAllMemories } = await import("./memwal");
+
+  let walk: ListWalkResult;
+  try {
+    walk = await listAllMemories();
+  } catch (err) {
+    if (isListUnavailable(err)) return rebuildFromRecallFallback(mode, confirm);
+    return unfinishedReport({
+      mode,
+      enumeration: "list",
+      limitation: LIST_ENUMERATION_NOTE,
+      warning: `memory list failed before coverage was complete: ${errorMessage(err)}. The projection was not modified.`,
+    });
+  }
+
+  const hydrated = await hydrateListed(walk);
+  const assessment = finishInventory({
+    walk,
+    texts: hydrated.texts,
+    productNamespaces: Object.values(NS),
+    ...(hydrated.hydrationError ? { hydrationError: hydrated.hydrationError } : {}),
+  });
+  const stored = await readStoredRows();
+  const extraNotes = [
+    `Listed ${walk.memories.length} memories and ${walk.deleted.length} tombstones across ${walk.pages} page(s).`,
+  ];
+  if (walk.resyncs > 0) {
+    extraNotes.push("The list cursor was older than tombstone retention, so the walk restarted without a cursor.");
+  }
+  return finishReport({
+    mode,
+    confirm,
+    enumeration: "list",
+    limitation: LIST_ENUMERATION_NOTE,
+    assessment,
+    rawHits: hydrated.rawHits,
+    extraNotes,
+    stored,
+  });
+}
+
+async function rebuildFromRecallFallback(
+  mode: "verify" | "rebuild",
+  confirm: boolean,
+): Promise<ProjectionReport> {
   const { recallMemory, listNamespaces } = await import("./memwal");
   const gathered = await gatherMemories((q) => recallMemory(q));
 
@@ -722,63 +947,42 @@ export async function rebuildProjection(opts?: {
   }
 
   const byNamespace = countByNamespace(gathered.memories);
-  const projection = projectMemories(gathered.memories);
   const decision = decideTruncation({
     unique: gathered.memories.length,
     recalledByNamespace: byNamespace,
     reportedByNamespace: reported,
   });
-  const stored = await readStoredRows();
-  const comparison = compareWithStored({
-    recalled: projection,
-    sources: stored.sources,
-    claims: stored.claims,
-    resolutions: stored.resolutions,
-  });
-  const allowed = rebuildAllowed({
-    mode,
-    confirm: opts?.confirm === true,
-    coverageComplete: decision.truncate,
-  });
-
-  if (allowed.truncate) await applyProjection(projection);
-
-  const warning = [decision.warning, mode === "verify" ? allowed.reason : allowed.truncate ? null : allowed.reason]
-    .filter((line): line is string => Boolean(line))
-    .join(" ");
-
-  return {
-    mode,
-    truncated: allowed.truncate,
-    warning: warning || null,
-    limitation: RECALL_ENUMERATION_LIMIT,
-    notes: [...comparison.notes, ...projection.notes],
-    matched: comparison.matched,
-    mismatched: comparison.mismatched,
-    missingFromRecall: comparison.missingFromRecall,
-    recalledNotInPostgres: comparison.recalledNotInPostgres,
-    mismatches: comparison.mismatches,
-    missing: comparison.missing,
-    scores: comparison.scores,
-    coverageComplete: decision.truncate,
-    excludedNamespaces: decision.excludedNamespaces,
-    duplicatesDropped: gathered.duplicatesDropped + projection.duplicatesDropped,
-    skipped: projection.skipped,
-    counts: {
-      sources: projection.sources.length,
-      claims: projection.claims.length,
-      resolutions: projection.resolutions.length,
-      scoreVersions: projection.scoreVersions.length,
-      memoryLog: projection.memoryLog.length,
-    },
-    coverage: {
-      rawHits: gathered.rawHits,
-      unique: gathered.memories.length,
-      byNamespace,
-      reported,
-      gaps: decision.gaps,
-    },
+  const { product, excluded } = partitionNamespaceCounts(reported);
+  const listedByNamespace = product ?? byNamespace;
+  const assessment: InventoryAssessment = {
+    coverageComplete: false,
+    warning: decision.warning,
+    memories: gathered.memories.map((memory) => ({
+      blobId: memory.blobId,
+      text: memory.text,
+      namespace: memory.namespace,
+      ...(memory.createdAt ? { createdAt: memory.createdAt } : {}),
+    })),
+    gaps: decision.gaps,
+    excludedNamespaces: excluded,
+    listedByNamespace,
+    hydratedByNamespace: byNamespace,
+    deletedCount: 0,
+    missingBlobIds: [],
+    extraBlobIds: [],
   };
+  const stored = await readStoredRows();
+  return finishReport({
+    mode,
+    confirm,
+    enumeration: "recall-fallback",
+    limitation: RECALL_FALLBACK_NOTE,
+    assessment,
+    rawHits: gathered.rawHits,
+    extraNotes: [],
+    duplicatesDropped: gathered.duplicatesDropped,
+    stored,
+  });
 }
 
 async function readStoredRows(): Promise<{

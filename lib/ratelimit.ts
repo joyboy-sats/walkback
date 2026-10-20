@@ -99,10 +99,18 @@ export class RateLimiter {
 /**
  * The one limiter every Walrus Memory write must pass through.
  *
- * Reads (`recall`, `listNamespaces`) are not gated: they are cheap, and gating
- * them would stall the UI for no benefit.
+ * A single `recall` or `listNamespaces` call is not gated. Paging the owner
+ * inventory and then recalling each product namespace is many calls, so that
+ * walk uses `memwalReadLimiter`. The read API has its own budget, separate
+ * from the 30/min write budget; 30/min stays under the published example of
+ * 60 weighted reads per minute.
  */
 export const memwalWriteLimiter = new RateLimiter({
   capacity: 25,
+  windowMs: 60_000,
+});
+
+export const memwalReadLimiter = new RateLimiter({
+  capacity: 30,
   windowMs: 60_000,
 });

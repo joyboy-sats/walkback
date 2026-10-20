@@ -29,7 +29,15 @@ import "server-only";
 import { MemWal } from "@mysten-incubation/memwal";
 import { writeDurable, type DurableStepResult } from "./durable-writes";
 import { isReplay, requireDelegateKey } from "./env";
-import { memwalWriteLimiter } from "./ratelimit";
+import {
+  LIST_PAGE_LIMIT,
+  ListUnavailableError,
+  parseMemoriesPage,
+  walkMemories,
+  type ListWalkResult,
+  type MemoriesPage,
+} from "./memory-list";
+import { memwalReadLimiter, memwalWriteLimiter } from "./ratelimit";
 import type { Namespace } from "./types";
 
 /** Server-side hard limit for one bulk call. */
@@ -205,6 +213,103 @@ export async function recallMemory(a: RecallArgs): Promise<RecallHit[]> {
   }));
 }
 
+/**
+ * Signer used by the installed SDK. `signedRequest` is private in the `.d.ts`
+ * and `listMemories` is not in 0.1.8 (npm latest is 0.1.8). Calling the
+ * method that already signs requests keeps the canonical string, the nonce,
+ * and the clock-drift handling on the SDK's code path. Metadata reads pass
+ * `includeDelegateKey: false`, so no SEAL session and no delegate key go out.
+ */
+type SdkSigner = {
+  signedRequest: (
+    method: string,
+    path: string,
+    body: unknown,
+    acceptedStatuses?: number[],
+    requestOptions?: { includeDelegateKey?: boolean; timeoutMs?: number },
+  ) => Promise<unknown>;
+};
+
+function signer(): SdkSigner {
+  return getClient() as unknown as SdkSigner;
+}
+
+let ownerAddress: string | null = null;
+let ownerPromise: Promise<string> | null = null;
+
+/**
+ * Owner address for `/v1/owners/:owner/...`. Same call the SDK uses:
+ * signed `POST /api/stats` with the client's namespace (`default` when
+ * `MemWal.create` is not given one). The address is a public config value,
+ * like `MEMWAL_AGENT_ID` (`getPublicKeyHex()`).
+ */
+async function resolveOwner(): Promise<string> {
+  if (ownerAddress) return ownerAddress;
+  if (ownerPromise) return ownerPromise;
+  ownerPromise = (async () => {
+    const stats = (await signer().signedRequest(
+      "POST",
+      "/api/stats",
+      { namespace: "default" },
+      [200],
+      { includeDelegateKey: false },
+    )) as { owner?: string };
+    if (!stats.owner || !/^[0-9A-Za-z]+$/.test(stats.owner)) {
+      throw new Error(
+        "Walrus Memory could not resolve this account's owner address (POST /api/stats returned no owner).",
+      );
+    }
+    ownerAddress = stats.owner;
+    return stats.owner;
+  })().finally(() => {
+    ownerPromise = null;
+  });
+  return ownerPromise;
+}
+
+function statusOf(err: unknown): number | undefined {
+  if (!err || typeof err !== "object" || !("status" in err)) return undefined;
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+/**
+ * One page of `GET /v1/owners/:owner/memories`. Metadata only on the current
+ * relayer. 404/405/501 become `ListUnavailableError` so rebuild can fall
+ * back to recall; every other failure stays a failure.
+ */
+export async function listMemoriesPage(options?: {
+  cursor?: string;
+  limit?: number;
+}): Promise<MemoriesPage> {
+  await memwalReadLimiter.acquire();
+  const owner = await resolveOwner();
+  const params = new URLSearchParams();
+  if (options?.cursor !== undefined) params.set("updated_after", options.cursor);
+  params.set("limit", String(options?.limit ?? LIST_PAGE_LIMIT));
+  const path = `/v1/owners/${owner}/memories?${params.toString()}`;
+  try {
+    const raw = await signer().signedRequest("GET", path, {}, [200], { includeDelegateKey: false });
+    return parseMemoriesPage(raw);
+  } catch (err) {
+    const status = statusOf(err);
+    if (status === 404 || status === 405 || status === 501) {
+      throw new ListUnavailableError(
+        "GET /v1/owners/:owner/memories is not on this relayer. Listing is unavailable.",
+        status,
+      );
+    }
+    throw err;
+  }
+}
+
+/** Every page, in order. A mid-walk error rejects; it does not return a prefix. */
+export async function listAllMemories(): Promise<ListWalkResult> {
+  return walkMemories({
+    fetchPage: (cursor) => listMemoriesPage(cursor === undefined ? {} : { cursor }),
+  });
+}
+
 /** Namespaces this account holds memories in, with counts and storage used. */
 export async function listNamespaces() {
   const res = await getClient().listNamespaces({ limit: 100 });
@@ -236,8 +341,9 @@ export async function restoreNamespace(namespace: Namespace, limit = 200) {
 }
 
 /**
- * The delegate public key — the value the submission form wants as
- * MEMWAL_AGENT_ID. Async: it is `Promise<string>`, not a property.
+ * The delegate public key. This is `MEMWAL_AGENT_ID`: `getPublicKeyHex()`,
+ * a public config value, not a secret. Async because the SDK returns
+ * `Promise<string>`.
  */
 export async function delegatePublicKeyHex(): Promise<string> {
   return getClient().getPublicKeyHex();
@@ -258,4 +364,6 @@ export async function relayerHealth() {
 export function destroyMemwal(): void {
   client?.destroy();
   client = null;
+  ownerAddress = null;
+  ownerPromise = null;
 }

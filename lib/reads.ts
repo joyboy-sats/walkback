@@ -3,7 +3,7 @@
  */
 import { asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "./db";
-import { RECALL_ENUMERATION_LIMIT } from "./projection-rebuild";
+import { LIST_ENUMERATION_NOTE } from "./projection-rebuild";
 
 export async function readFeed() {
   const db = getDb();
@@ -107,6 +107,6 @@ export async function readMemory() {
       blobId: r.blobId,
       textPreview: r.textPreview,
     })),
-    limitation: RECALL_ENUMERATION_LIMIT,
+    limitation: LIST_ENUMERATION_NOTE,
   };
 }

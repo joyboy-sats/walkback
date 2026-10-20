@@ -4,8 +4,8 @@
  * Verifies, in order:
  *   1. env is complete
  *   2. Walrus Memory relayer health (public, unauthenticated)
- *   3. delegate key authenticates; prints the delegate PUBLIC key
- *      — this is the value you put in the submission form's MEMWAL_AGENT_ID
+ *   3. delegate key authenticates; prints the delegate PUBLIC key from
+ *      getPublicKeyHex(). That public value is MEMWAL_AGENT_ID.
  *   4. a real write to MAINNET returns a blob_id
  *   5. recall() can read that blob back
  *   6. Tatum Sui RPC answers suix_getBalance
@@ -77,8 +77,8 @@ async function main() {
     const pub = await memwal.getPublicKeyHex();
     console.log(`delegate_public_key`);
     console.log(`  ${pub}`);
-    console.log(`\n  ↑ this is the candidate value for MEMWAL_AGENT_ID in the`);
-    console.log(`    submission form. Confirm with the organizers in Discord.`);
+    console.log(`\n  ↑ MEMWAL_AGENT_ID is this delegate public key (getPublicKeyHex()).`);
+    console.log(`    It is a public config value, not a secret.`);
 
     section("3. namespaces already on this account");
     try {

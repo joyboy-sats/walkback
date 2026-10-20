@@ -495,5 +495,13 @@ describe("rebuildAllowed", () => {
     expect(rebuildAllowed({ mode: "rebuild", confirm: true, coverageComplete: false }).truncate).toBe(false);
     expect(rebuildAllowed({ mode: "rebuild", confirm: false, coverageComplete: true }).truncate).toBe(false);
     expect(rebuildAllowed({ mode: "rebuild", confirm: true, coverageComplete: true }).truncate).toBe(true);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        enumeration: "recall-fallback",
+      }).truncate,
+    ).toBe(false);
   });
 });

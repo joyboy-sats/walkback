@@ -20,8 +20,10 @@ the owner's credentials on Coolify; nothing in this repo contains a key.
 What works today:
 
 - `npm run smoke` — proves the Walrus Memory mainnet delegate key works end to
-  end (health → write → recall) and prints the delegate public key you need for
-  the submission form.
+  end (health → write → recall) and prints the delegate public key
+  (`getPublicKeyHex()`, the submission form's `MEMWAL_AGENT_ID`).
+- `npm run list:memories` — with `.env.local` on a machine that has the
+  delegate key, pages the relayer inventory and prints counts only.
 - `npm run test`, `npm run typecheck`, `npm run build`.
 
 ## Why the design looks like this
@@ -47,10 +49,12 @@ the system has two layers with different jobs:
 | Postgres on Coolify (private) | queryable projection: sources, claims, resolutions, score versions, jobs | fast reads for the UI |
 | Walrus Memory (mainnet) | every claim, verdict and score version, as narrative text | **system of record** |
 
-`restore()` and the Memory page read Walrus back. Verify compares that read
-with Postgres and leaves the tables in place. Replacing the projection happens
-only after that coverage check is complete. Walrus stays the system of record;
-Postgres is the cache.
+`restore()` and the Memory page read Walrus back. Verify pages
+`GET /v1/owners/:owner/memories` (metadata) and loads plaintext with `recall()`,
+matched to those blob ids. It leaves the tables in place. Replacing the
+projection happens only after that list coverage is complete. If the list route
+is missing, the report is a marked recall sample and Replace stays off. Walrus
+stays the system of record; Postgres is the cache.
 
 ## Adjudication contract
 
@@ -94,8 +98,10 @@ From **memory.walrus.xyz** → SDK credentials:
 - `MEMWAL_PRIVATE_KEY` — Ed25519 delegate private key
 - `MEMWAL_SERVER_URL` — `https://relayer.memory.walrus.xyz` (mainnet)
 
-`MEMWAL_AGENT_ID` for the submission form is the delegate **public** key;
-`npm run smoke` prints it.
+`MEMWAL_AGENT_ID` for the submission form is the delegate public key from
+`getPublicKeyHex()`. It is a public config value, not a secret. `npm run smoke`
+prints it. `npm run list:memories` (same `.env.local`) prints how many memories
+the relayer lists, and nothing else.
 
 From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
 
@@ -198,8 +204,10 @@ Writes (`POST /ingest`, `/rebuild`, `/resolve`, `/restore`) require the header
 The ingest page and the Memory page ask for that token once per browser tab
 and keep it in `sessionStorage`. Vercel does not have a copy. Closing the tab
 drops it. A rejected token is cleared so the next submit asks again. On
-Memory, verify is the button you press in a demo. Replace projection is
-enabled only after verify reports complete coverage.
+Memory, verify is the button you press in a demo. It pages the relayer
+inventory. Replace projection is enabled only after that list coverage is
+complete. Run `npm run list:memories` on the worker host once, with the real
+delegate key, and confirm the live route returns a count before using Replace.
 
 ### Env vars on Vercel
 

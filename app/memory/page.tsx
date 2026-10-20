@@ -55,13 +55,16 @@ export default async function MemoryPage() {
       <section className="border border-[var(--line)] rounded-lg p-4">
         <h2 className="text-sm text-[var(--dim)]">verify against Walrus</h2>
         <p className="mt-2 text-sm max-w-2xl">
-          The primary action reads memories from Walrus and compares them with
-          Postgres, record by record. It reports what matched, what disagreed,
-          and what recall did not surface, plus the score recomputed from the
-          verdicts recall returned. It does not drop tables. Replacing the
-          projection stays unavailable until that coverage report is complete,
-          and it still asks you to confirm. The button asks for the admin token
-          once per tab, the same ADMIN_TOKEN the ingest page uses.
+          The primary action pages the relayer inventory and compares it with
+          Postgres, record by record. The list is metadata, so plaintext is
+          loaded with recall and matched to those blob ids. It reports what
+          matched, what disagreed, and which Postgres rows were not in that
+          inventory, plus the score recomputed from the verdicts. It does not
+          drop tables. Replacing the projection stays unavailable until every
+          live product-namespace memory was read, and it still asks you to
+          confirm. If the list route is missing, the report says it fell back
+          to a recall sample and Replace stays off. The button asks for the
+          admin token once per tab, the same ADMIN_TOKEN the ingest page uses.
         </p>
         {loadError ? (
           <p className="mt-2 text-sm text-[var(--bad)]">{loadError}</p>
