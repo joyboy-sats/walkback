@@ -29,10 +29,11 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
       });
     }
     case "rebuild": {
-      const payload = job.payload as { mode?: string; confirm?: boolean };
+      const payload = job.payload as { mode?: string; confirm?: boolean; allowShrink?: boolean };
       return rebuildProjection({
         mode: payload.mode === "rebuild" ? "rebuild" : "verify",
         confirm: payload.confirm === true,
+        allowShrink: payload.allowShrink === true,
       });
     }
     case "resolve": {

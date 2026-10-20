@@ -4,9 +4,11 @@
  *   npm run list:memories
  *
  * Reads `.env.local` on the machine that has the delegate key (the Coolify
- * worker, or a laptop). Prints counts only: no memory text, no blob ids, no
- * keys. `MEMWAL_AGENT_ID` is the delegate public key from `getPublicKeyHex()`;
- * this script does not read or print it.
+ * worker, or a laptop). Only `MEMWAL_ACCOUNT_ID`, `MEMWAL_PRIVATE_KEY`, and
+ * `MEMWAL_SERVER_URL` are required. Tatum and Postgres are not. Prints counts
+ * only: no memory text, no blob ids, no keys. `MEMWAL_AGENT_ID` is the
+ * delegate public key from `getPublicKeyHex()`; this script does not read or
+ * print it.
  *
  * Run this before trusting Replace. A thrown error here means the live
  * `GET /v1/owners/:owner/memories` route or the signing path still needs a look.
@@ -16,11 +18,9 @@ import { config } from "dotenv";
 
 config({ path: ".env.local" });
 
-const { requireDelegateKey } = await import("../lib/env");
 const { destroyMemwal, listAllMemories } = await import("../lib/memwal");
 
 try {
-  requireDelegateKey();
   const walk = await listAllMemories();
   const deletedIds = new Set(walk.deleted.map((row) => row.memoryId));
   const byNamespace = new Map<string, number>();

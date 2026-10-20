@@ -34,6 +34,7 @@ const resolveBody = z.union([
 const rebuildBody = z.object({
   mode: z.enum(["verify", "rebuild"]).optional(),
   confirm: z.boolean().optional(),
+  allowShrink: z.boolean().optional(),
 });
 
 const restoreBody = z.object({
@@ -178,6 +179,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
         const id = await enqueueJob("rebuild", {
           mode: parsed.mode ?? "verify",
           confirm: parsed.confirm === true,
+          allowShrink: parsed.allowShrink === true,
         });
         send(res, 202, { jobId: id }, cors);
         return;

@@ -61,8 +61,11 @@ export default async function MemoryPage() {
           matched, what disagreed, and which Postgres rows were not in that
           inventory, plus the score recomputed from the verdicts. It does not
           drop tables. Replacing the projection stays unavailable until every
-          live product-namespace memory was read, and it still asks you to
-          confirm. If the list route is missing, the report says it fell back
+          live product-namespace memory was read, the rebuild would not shrink
+          sources, claims, resolutions, or score versions, and no seed post is
+          unfinished. It still asks you to confirm. Score versions are recomputed
+          from resolutions, so that namespace is not decrypted. If the list route
+          is missing, the report says it fell back
           to a recall sample and Replace stays off. The button asks for the
           admin token once per tab, the same ADMIN_TOKEN the ingest page uses.
         </p>

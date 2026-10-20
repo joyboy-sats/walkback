@@ -31,6 +31,10 @@ interface VerifyResponse {
   recalledNotInPostgres?: number;
   scores?: ScoreRow[];
   coverageComplete?: boolean;
+  replaceAllowed?: boolean;
+  tables?: Array<{ table: string; before: number; after: number }>;
+  orphans?: Array<{ kind: string; id: string; detail: string }>;
+  unappliedSeedPosts?: string[];
   excludedNamespaces?: string[];
   mismatches?: Array<{ kind: string; id: string; detail: string }>;
   missing?: Array<{ kind: string; id: string }>;
@@ -110,7 +114,7 @@ export default function RebuildButton() {
     }
   }
 
-  const canReplace = phase === "done" && result?.mode === "verify" && result.coverageComplete === true;
+  const canReplace = phase === "done" && result?.mode === "verify" && result.replaceAllowed === true;
 
   return (
     <div className="mt-4">
@@ -133,8 +137,9 @@ export default function RebuildButton() {
         </button>
       </div>
       <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">
-        Verify is the demo. It does not drop tables. Replace stays off until a verify report
-        says every listed product-namespace memory was read. A recall fallback cannot turn it on.
+        Verify is the demo. It does not drop tables. Replace stays off until coverage is
+        complete and the rebuild would not drop Postgres rows, leave an orphan, or skip an
+        unfinished seed post. A recall fallback cannot turn it on.
       </p>
 
       {phase === "working" && (
@@ -188,6 +193,40 @@ function Report({ result }: { result: VerifyResponse }) {
           ? ` Excluded namespaces: ${result.excludedNamespaces.join(", ")}.`
           : ""}
       </p>
+      {result.tables && result.tables.length > 0 && (
+        <table className="mt-4 w-full text-xs">
+          <thead className="text-[var(--void)]">
+            <tr>
+              <th className="text-left font-normal py-1">table</th>
+              <th className="text-right font-normal">postgres</th>
+              <th className="text-right font-normal">rebuilt</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.tables.map((row) => (
+              <tr key={row.table} className="border-t border-[var(--line)]">
+                <td className="py-1">{row.table}</td>
+                <td className="text-right mono">{row.before}</td>
+                <td className={`text-right mono ${row.after < row.before ? "text-[var(--bad)]" : ""}`}>{row.after}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {result.orphans && result.orphans.length > 0 && (
+        <ul className="mt-2 text-xs text-[var(--bad)] space-y-1">
+          {result.orphans.map((orphan) => (
+            <li key={`${orphan.kind}:${orphan.id}`}>
+              orphan {orphan.kind} {orphan.id}: {orphan.detail}
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.unappliedSeedPosts && result.unappliedSeedPosts.length > 0 && (
+        <p className="mt-2 text-xs text-[var(--bad)]">
+          {result.unappliedSeedPosts.length} seed post{result.unappliedSeedPosts.length === 1 ? "" : "s"} with no applied_at.
+        </p>
+      )}
       {result.coverage?.gaps && result.coverage.gaps.length > 0 && (
         <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
           {result.coverage.gaps.map((g) => (

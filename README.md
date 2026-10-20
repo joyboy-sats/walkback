@@ -23,7 +23,8 @@ What works today:
   end (health → write → recall) and prints the delegate public key
   (`getPublicKeyHex()`, the submission form's `MEMWAL_AGENT_ID`).
 - `npm run list:memories` — with `.env.local` on a machine that has the
-  delegate key, pages the relayer inventory and prints counts only.
+  delegate key, pages the relayer inventory and prints counts only. It reads
+  `MEMWAL_ACCOUNT_ID`, `MEMWAL_PRIVATE_KEY`, and `MEMWAL_SERVER_URL` only.
 - `npm run test`, `npm run typecheck`, `npm run build`.
 
 ## Why the design looks like this

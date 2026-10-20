@@ -14,11 +14,16 @@ import { claimMemory, resolutionMemory, scoreMemory, sourceMemory, tombstoneMemo
 import {
   compareWithStored,
   decideTruncation,
+  demoMemoryCounts,
+  deriveScoreVersions,
   EXCLUDED_NAMESPACES,
   gatherMemories,
+  plaintextNamespaces,
   projectMemories,
+  projectionDiff,
   rebuildAllowed,
   recallPlan,
+  replaceSafety,
   type GatheredMemory,
   type RecallQuery,
 } from "./projection-rebuild";
@@ -503,5 +508,138 @@ describe("rebuildAllowed", () => {
         enumeration: "recall-fallback",
       }).truncate,
     ).toBe(false);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        shrinks: true,
+      }).truncate,
+    ).toBe(false);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        shrinks: true,
+        allowShrink: true,
+      }).truncate,
+    ).toBe(true);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        orphans: true,
+        allowShrink: true,
+      }).truncate,
+    ).toBe(false);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        unappliedSeed: true,
+        allowShrink: true,
+      }).truncate,
+    ).toBe(false);
+    expect(
+      rebuildAllowed({
+        mode: "rebuild",
+        confirm: true,
+        coverageComplete: true,
+        emptyInventory: true,
+        allowShrink: true,
+      }).truncate,
+    ).toBe(false);
+  });
+});
+
+describe("replace safety", () => {
+  it("refuses a rebuild that is smaller than Postgres in any table and reports the diff", () => {
+    const tables = projectionDiff(
+      { sources: 2, claims: 10, resolutions: 4, scoreVersions: 4 },
+      { sources: 2, claims: 1, resolutions: 0, scoreVersions: 0 },
+    );
+    const safety = replaceSafety({ tables, orphans: [], unappliedSeedPosts: [] });
+    expect(safety.shrinks.map((row) => row.table)).toEqual(["claims", "resolutions", "scoreVersions"]);
+    expect(safety.warning).toContain("claims 10 -> 1");
+    expect(tables.find((row) => row.table === "sources")).toEqual({ table: "sources", before: 2, after: 2 });
+  });
+
+  it("blocks on an unfinished seed post and on an orphan even when sizes match", () => {
+    const tables = projectionDiff(
+      { sources: 1, claims: 1, resolutions: 0, scoreVersions: 0 },
+      { sources: 1, claims: 1, resolutions: 0, scoreVersions: 0 },
+    );
+    const seed = replaceSafety({ tables, orphans: [], unappliedSeedPosts: ["post-1"] });
+    expect(seed.shrinks).toEqual([]);
+    expect(seed.warning).toContain("applied_at");
+    const orphan = replaceSafety({
+      tables,
+      orphans: [{ kind: "claim", id: "c1", detail: "no source memory for alpha" }],
+      unappliedSeedPosts: [],
+    });
+    expect(orphan.warning).toContain("orphan");
+  });
+});
+
+describe("derived scores", () => {
+  it("recomputes the same score versions without the score memories", () => {
+    const world = buildWorld();
+    const withoutScores = world.memories.filter((memory) => memory.namespace !== NS.score);
+    const fromVerdicts = projectMemories(withoutScores);
+    const fromMemories = projectMemories(world.memories);
+    expect(fromVerdicts.scoreVersions).toHaveLength(world.scoreVersionCount);
+    expect(fromVerdicts.scoreVersions.map((version) => [version.sourceId, version.version, version.hits, version.misses, version.score])).toEqual(
+      fromMemories.scoreVersions.map((version) => [version.sourceId, version.version, version.hits, version.misses, version.score]),
+    );
+    expect(fromVerdicts.orphans).toEqual([]);
+    expect(plaintextNamespaces()).not.toContain(NS.score);
+  });
+
+  it("flags a claim whose source memory is missing", () => {
+    const claimId = claimUuid(1);
+    const projection = projectMemories([
+      memory(
+        NS.claim,
+        claimMemory(
+          {
+            id: claimId,
+            sourceHandle: "ghost",
+            claimType: "balance_threshold",
+            params,
+            deadline: DEADLINE,
+            confidence: 0.9,
+          },
+          {
+            quote: "ghost claim",
+            claimType: "balance_threshold",
+            params,
+            deadline: DEADLINE,
+            confidence: 0.9,
+          },
+          null,
+        ),
+        "blob-orphan-claim",
+      ),
+    ]);
+    expect(projection.orphans).toEqual([
+      { kind: "claim", id: claimId, detail: "no source memory for ghost" },
+    ]);
+  });
+
+  it("keeps a 50-claim demo under the recall cap by not decrypting scores", () => {
+    const demo = demoMemoryCounts({ sources: 10, claims: 50, nonVoidResolutions: 50 });
+    expect(demo.written[NS.score]).toBe(50);
+    expect(demo.decrypted[NS.score]).toBe(0);
+    expect(demo.decrypted[NS.claim]).toBe(50);
+    expect(demo.decrypted[NS.resolution]).toBe(50);
+    expect(demo.decrypted[NS.source]).toBe(10);
+    expect(demo.decrypted[NS.digest]).toBe(0);
+    expect(demo.maxDecrypted).toBe(50);
+    const oneEach = demoMemoryCounts({ sources: 50, claims: 50, nonVoidResolutions: 50 });
+    expect(oneEach.maxDecrypted).toBe(50);
+    expect(deriveScoreVersions({ claims: [], resolutions: [] })).toEqual([]);
   });
 });

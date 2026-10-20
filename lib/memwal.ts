@@ -28,7 +28,8 @@ import "server-only";
 
 import { MemWal } from "@mysten-incubation/memwal";
 import { writeDurable, type DurableStepResult } from "./durable-writes";
-import { isReplay, requireDelegateKey } from "./env";
+import { isReplay } from "./env";
+import { requireMemwalConfig } from "./memwal-config";
 import {
   LIST_PAGE_LIMIT,
   ListUnavailableError,
@@ -47,7 +48,8 @@ let client: MemWal | null = null;
 
 function getClient(): MemWal {
   if (client) return client;
-  const e = requireDelegateKey();
+  // Narrow on purpose: listing must not require Tatum or Postgres.
+  const e = requireMemwalConfig();
   client = MemWal.create({
     key: e.privateKey,
     accountId: e.accountId,

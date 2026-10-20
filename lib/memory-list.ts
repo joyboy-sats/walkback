@@ -300,9 +300,16 @@ export function finishInventory(input: {
   walk: ListWalkResult | { failed: string };
   texts: readonly HydratedText[];
   productNamespaces: readonly string[];
+  /**
+   * Namespaces whose plaintext must be loaded. Defaults to every product
+   * namespace. `walkback.score` is omitted: those versions are recomputed
+   * from resolutions, so a long score history does not have to fit in one recall.
+   */
+  plaintextNamespaces?: readonly string[];
   hydrationError?: string;
 }): InventoryAssessment {
   const product = new Set(input.productNamespaces);
+  const requireText = new Set(input.plaintextNamespaces ?? input.productNamespaces);
   if ("failed" in input.walk) {
     return {
       coverageComplete: false,
@@ -335,7 +342,7 @@ export function finishInventory(input: {
   const hydrated: HydratedText[] = [];
   const missingBlobIds: string[] = [];
   for (const memory of live) {
-    if (!product.has(memory.namespaceId)) continue;
+    if (!product.has(memory.namespaceId) || !requireText.has(memory.namespaceId)) continue;
     const key = memory.blobId ? `${memory.namespaceId}\0${memory.blobId}` : `missing:${memory.memoryId}`;
     listedKeys.add(key);
     const inline = memory.text;
@@ -362,7 +369,8 @@ export function finishInventory(input: {
   }
 
   const gaps: InventoryGap[] = [];
-  for (const namespace of input.productNamespaces) {
+  for (const namespace of requireText) {
+    if (!product.has(namespace)) continue;
     const reported = live.filter((m) => m.namespaceId === namespace).length;
     const recalled = hydrated.filter((m) => m.namespace === namespace).length;
     if (recalled < reported) gaps.push({ namespace, recalled, reported });

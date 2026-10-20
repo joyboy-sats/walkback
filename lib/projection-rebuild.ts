@@ -19,7 +19,7 @@
 import "server-only";
 
 import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
-import { computeScore, type TrustBand } from "./score";
+import { applyOutcome, computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
 import {
   contentPlan,
@@ -39,8 +39,12 @@ export const LIST_ENUMERATION_NOTE =
   "blob ids. Coverage is exact: every live product-namespace blob id must come back with text, " +
   "and recall must not add blob ids the list did not have. The relayer decrypts at most 100 hits " +
   "per recall, so a larger namespace stays incomplete. walkback.smoke and walkback.timing are " +
-  "excluded. Replace runs only when that coverage is complete and replace is confirmed. If the " +
-  "list route is missing, the report is a marked recall sample and Replace stays off.";
+  "excluded. walkback.score is not decrypted: each version is the Wilson bound replayed over " +
+  "resolutions, so a long score history does not have to fit in one recall. Replace also stays " +
+  "off when any of sources, claims, resolutions, or score versions would shrink, when the " +
+  "rebuilt rows have an orphan, or when a seed post has no applied_at. allowShrink overrides " +
+  "only the shrink check. If the list route is missing, the report is a marked recall sample " +
+  "and Replace stays off.";
 
 /** @deprecated Use LIST_ENUMERATION_NOTE. Kept so older imports still compile. */
 export const RECALL_ENUMERATION_LIMIT = LIST_ENUMERATION_NOTE;
@@ -216,8 +220,15 @@ export interface RebuiltScoreVersion {
   hitRate: number;
   triggeredByClaimId: string | null;
   reason: string;
-  walrusBlobId: string;
+  /** Null when the version was recomputed from resolutions and the score blob was not decrypted. */
+  walrusBlobId: string | null;
   createdAt: string;
+}
+
+export interface ProjectionOrphan {
+  kind: "claim" | "resolution" | "score";
+  id: string;
+  detail: string;
 }
 
 export interface RebuiltMemoryLog {
@@ -238,6 +249,7 @@ export interface Projection {
   skipped: Array<{ blobId: string; reason: string }>;
   duplicatesDropped: number;
   notes: string[];
+  orphans: ProjectionOrphan[];
 }
 
 interface Tombstone {
@@ -323,6 +335,7 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
   }
 
   const notes: string[] = [];
+  const orphans: ProjectionOrphan[] = [];
   const deadSources = new Set(
     tombstones.filter((t) => t.refKind === "source").map((t) => t.refId),
   );
@@ -341,6 +354,11 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
     sources.set(id, created);
     sourcesByHandle.set(claim.sourceHandle, created);
     claim.sourceId = id;
+    orphans.push({
+      kind: "claim",
+      id: claim.id,
+      detail: `no source memory for ${claim.sourceHandle}`,
+    });
     notes.push(
       `no source memory for ${claim.sourceHandle}; rebuilt a source row from its claims`,
     );
@@ -354,7 +372,16 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
     }
   }
   for (const claimId of resolutions.keys()) {
-    if (!claims.has(claimId)) resolutions.delete(claimId);
+    if (!claims.has(claimId)) {
+      if (!deadClaims.has(claimId)) {
+        orphans.push({
+          kind: "resolution",
+          id: claimId,
+          detail: "claim is not in the projection",
+        });
+      }
+      resolutions.delete(claimId);
+    }
   }
   const liveScores = scoreVersions.filter((v) => sources.has(v.sourceId));
 
@@ -385,19 +412,40 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
     source.band = score.band;
     source.muted = score.band === "muted";
 
-    const latest = liveScores
-      .filter((v) => v.sourceId === source.id)
-      .sort((a, b) => b.version - a.version)[0];
+  }
+
+  const scoreVersionsDerived = deriveScoreVersions({
+    claims: [...claims.values()],
+    resolutions: [...resolutions.values()],
+    recalled: liveScores,
+  });
+  for (const version of scoreVersionsDerived) {
+    const prior = liveScores.find((row) => row.sourceId === version.sourceId && row.version === version.version);
     if (
-      latest &&
-      (latest.hits !== score.hits ||
-        latest.misses !== score.misses ||
-        Math.abs(latest.score - score.score) > 1e-9)
+      prior &&
+      (prior.hits !== version.hits ||
+        prior.misses !== version.misses ||
+        Math.abs(prior.score - version.score) > 1e-9)
     ) {
+      const handle = [...sources.values()].find((source) => source.id === version.sourceId)?.handle;
       notes.push(
-        `${source.handle}: score memory v${latest.version} disagrees with the verdicts; ` +
-          `the projection uses the recomputed score ${score.score.toFixed(4)}`,
+        `${handle ?? version.sourceId}: score memory v${version.version} disagrees with the verdicts; ` +
+          `the projection uses the recomputed score ${version.score.toFixed(4)}`,
       );
+    }
+    if (version.triggeredByClaimId && !claims.has(version.triggeredByClaimId)) {
+      orphans.push({
+        kind: "score",
+        id: `${version.sourceId}:v${version.version}`,
+        detail: "triggered claim is not in the projection",
+      });
+    }
+    if (!sources.has(version.sourceId)) {
+      orphans.push({
+        kind: "score",
+        id: `${version.sourceId}:v${version.version}`,
+        detail: "source is not in the projection",
+      });
     }
   }
 
@@ -405,14 +453,128 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
     sources: [...sources.values()].sort((a, b) => a.handle.localeCompare(b.handle)),
     claims: [...claims.values()].sort((a, b) => a.id.localeCompare(b.id)),
     resolutions: [...resolutions.values()].sort((a, b) => a.claimId.localeCompare(b.claimId)),
-    scoreVersions: liveScores.sort(
-      (a, b) => a.sourceId.localeCompare(b.sourceId) || a.version - b.version,
-    ),
+    scoreVersions: scoreVersionsDerived,
     memoryLog: memoryLog.sort((a, b) => a.blobId.localeCompare(b.blobId)),
     skipped,
     duplicatesDropped,
     notes,
+    orphans,
   };
+}
+
+/**
+ * Score versions are the Wilson bound replayed over resolutions.
+ * A void does not add a version. Order is resolution time, then claim id.
+ * Recalled score blobs are attached when the version number matches; they
+ * are not required, so `walkback.score` does not have to fit in one recall.
+ */
+export function deriveScoreVersions(input: {
+  claims: readonly { id: string; sourceId: string }[];
+  resolutions: readonly { claimId: string; outcome: Outcome; resolvedAt: string }[];
+  recalled?: readonly RebuiltScoreVersion[];
+}): RebuiltScoreVersion[] {
+  const sourceOf = new Map(input.claims.map((claim) => [claim.id, claim.sourceId]));
+  const bySource = new Map<string, Array<{ claimId: string; outcome: Outcome; resolvedAt: string }>>();
+  for (const resolution of input.resolutions) {
+    const sourceId = sourceOf.get(resolution.claimId);
+    if (!sourceId) continue;
+    const rows = bySource.get(sourceId) ?? [];
+    rows.push(resolution);
+    bySource.set(sourceId, rows);
+  }
+  const recalled = new Map((input.recalled ?? []).map((version) => [`${version.sourceId}:${version.version}`, version]));
+  const versions: RebuiltScoreVersion[] = [];
+  for (const [sourceId, rows] of bySource) {
+    rows.sort((a, b) => a.resolvedAt.localeCompare(b.resolvedAt) || a.claimId.localeCompare(b.claimId));
+    let hits = 0;
+    let misses = 0;
+    let version = 0;
+    for (const row of rows) {
+      const before = computeScore(hits, misses);
+      const after = applyOutcome(hits, misses, row.outcome);
+      hits = after.hits;
+      misses = after.misses;
+      if (after.adjudicated === before.adjudicated) continue;
+      version += 1;
+      const prior = recalled.get(`${sourceId}:${version}`);
+      versions.push({
+        sourceId,
+        version,
+        hits: after.hits,
+        misses: after.misses,
+        score: after.score,
+        hitRate: after.hitRate,
+        triggeredByClaimId: row.claimId,
+        reason: prior?.reason ?? `claim resolved ${row.outcome}`,
+        walrusBlobId: prior?.walrusBlobId ?? null,
+        createdAt: row.resolvedAt,
+      });
+    }
+  }
+  versions.sort((a, b) => a.sourceId.localeCompare(b.sourceId) || a.version - b.version);
+  return versions;
+}
+
+export const TABLE_NAMES = ["sources", "claims", "resolutions", "scoreVersions"] as const;
+export type TableName = (typeof TABLE_NAMES)[number];
+
+export interface TableDiff {
+  table: TableName;
+  before: number;
+  after: number;
+}
+
+/**
+ * Memories a demo writes, and which of them rebuild has to decrypt.
+ * Score versions are one per non-void resolution and are recomputed, so they
+ * are not in `decrypted`. Digest is not written by ingest or resolve.
+ */
+export function demoMemoryCounts(input: {
+  sources: number;
+  claims: number;
+  nonVoidResolutions: number;
+  voidResolutions?: number;
+}): { written: Record<string, number>; decrypted: Record<string, number>; maxDecrypted: number } {
+  const voids = input.voidResolutions ?? 0;
+  const written: Record<string, number> = {
+    [NS.source]: input.sources,
+    [NS.claim]: input.claims,
+    [NS.resolution]: input.nonVoidResolutions + voids,
+    [NS.score]: input.nonVoidResolutions,
+    [NS.digest]: 0,
+    [NS.tombstone]: 0,
+  };
+  const decrypted: Record<string, number> = { ...written, [NS.score]: 0 };
+  const maxDecrypted = Math.max(0, ...Object.values(decrypted));
+  return { written, decrypted, maxDecrypted };
+}
+
+export function projectionDiff(before: Record<TableName, number>, after: Record<TableName, number>): TableDiff[] {
+  return TABLE_NAMES.map((table) => ({ table, before: before[table], after: after[table] }));
+}
+
+export function replaceSafety(input: {
+  tables: readonly TableDiff[];
+  orphans: readonly ProjectionOrphan[];
+  unappliedSeedPosts: readonly string[];
+}): { shrinks: TableDiff[]; warning: string | null } {
+  const shrinks = input.tables.filter((row) => row.after < row.before);
+  const lines: string[] = [];
+  if (shrinks.length > 0) {
+    const detail = shrinks.map((row) => `${row.table} ${row.before} -> ${row.after}`).join("; ");
+    lines.push(
+      `rebuild would drop rows (${detail}). Replace stays off unless allowShrink is set.`,
+    );
+  }
+  if (input.orphans.length > 0) {
+    lines.push(`${input.orphans.length} orphan row(s) in the rebuilt projection. Replace stays off.`);
+  }
+  if (input.unappliedSeedPosts.length > 0) {
+    lines.push(
+      `${input.unappliedSeedPosts.length} seed post(s) have no applied_at. Replace stays off.`,
+    );
+  }
+  return { shrinks, warning: lines.length > 0 ? lines.join(" ") : null };
 }
 
 export interface TruncationDecision {
@@ -500,6 +662,12 @@ export function rebuildAllowed(input: {
   confirm: boolean;
   coverageComplete: boolean;
   enumeration?: "list" | "recall-fallback";
+  shrinks?: boolean;
+  orphans?: boolean;
+  unappliedSeed?: boolean;
+  allowShrink?: boolean;
+  /** No live memories in the namespaces rebuild decrypts. Smoke and timing do not count. */
+  emptyInventory?: boolean;
 }): { truncate: boolean; reason: string } {
   if (input.enumeration === "recall-fallback") {
     return {
@@ -513,8 +681,29 @@ export function rebuildAllowed(input: {
   if (!input.coverageComplete) {
     return { truncate: false, reason: "coverage is incomplete, so the projection was not replaced" };
   }
+  if (input.emptyInventory) {
+    return {
+      truncate: false,
+      reason: "the product namespaces listed no memories, so the projection was not replaced",
+    };
+  }
+  if (input.unappliedSeed) {
+    return { truncate: false, reason: "a seed post has no applied_at, so the projection was not replaced" };
+  }
+  if (input.orphans) {
+    return { truncate: false, reason: "the rebuilt projection has orphan rows, so it was not replaced" };
+  }
+  if (input.shrinks && !input.allowShrink) {
+    return {
+      truncate: false,
+      reason: "the rebuild would drop rows that Postgres still has, so the projection was not replaced",
+    };
+  }
   if (!input.confirm) {
     return { truncate: false, reason: "coverage is complete; replace was not confirmed" };
+  }
+  if (input.shrinks && input.allowShrink) {
+    return { truncate: true, reason: "allowShrink was set, so a smaller projection replaced Postgres" };
   }
   return { truncate: true, reason: "coverage is complete and replace was confirmed" };
 }
@@ -704,6 +893,12 @@ export interface ProjectionReport {
     scoreVersions: number;
     memoryLog: number;
   };
+  /** Per-table sizes before (Postgres) and after (rebuilt projection). */
+  tables: TableDiff[];
+  orphans: ProjectionOrphan[];
+  unappliedSeedPosts: string[];
+  /** True when a confirmed rebuild would truncate. Verify sets this so the button can follow the same gates. */
+  replaceAllowed: boolean;
   coverage: {
     rawHits: number;
     unique: number;
@@ -751,6 +946,10 @@ function unfinishedReport(input: {
     duplicatesDropped: 0,
     skipped: [],
     counts: { sources: 0, claims: 0, resolutions: 0, scoreVersions: 0, memoryLog: 0 },
+    tables: [],
+    orphans: [],
+    unappliedSeedPosts: [],
+    replaceAllowed: false,
     coverage: emptyCoverage(),
   };
 }
@@ -764,10 +963,13 @@ async function finishReport(input: {
   rawHits: number;
   extraNotes: string[];
   duplicatesDropped?: number;
+  allowShrink?: boolean;
   stored: {
     sources: StoredSourceRow[];
     claims: StoredClaimRow[];
     resolutions: StoredResolutionRow[];
+    scoreVersionCount: number;
+    unappliedSeedIds: string[];
   };
 }): Promise<ProjectionReport> {
   const gathered = input.assessment.memories.map((memory) => ({
@@ -783,16 +985,44 @@ async function finishReport(input: {
     claims: input.stored.claims,
     resolutions: input.stored.resolutions,
   });
-  const allowed = rebuildAllowed({
-    mode: input.mode,
-    confirm: input.confirm,
+  const tables = projectionDiff(
+    {
+      sources: input.stored.sources.length,
+      claims: input.stored.claims.length,
+      resolutions: input.stored.resolutions.length,
+      scoreVersions: input.stored.scoreVersionCount,
+    },
+    {
+      sources: projection.sources.length,
+      claims: projection.claims.length,
+      resolutions: projection.resolutions.length,
+      scoreVersions: projection.scoreVersions.length,
+    },
+  );
+  const safety = replaceSafety({
+    tables,
+    orphans: projection.orphans,
+    unappliedSeedPosts: input.stored.unappliedSeedIds,
+  });
+  const emptyInventory = plaintextNamespaces().every(
+    (namespace) => (input.assessment.listedByNamespace[namespace] ?? 0) === 0,
+  );
+  const gate = {
     coverageComplete: input.assessment.coverageComplete,
     enumeration: input.enumeration,
-  });
+    shrinks: safety.shrinks.length > 0,
+    orphans: projection.orphans.length > 0,
+    unappliedSeed: input.stored.unappliedSeedIds.length > 0,
+    allowShrink: input.allowShrink === true,
+    emptyInventory,
+  };
+  const allowed = rebuildAllowed({ mode: input.mode, confirm: input.confirm, ...gate });
+  const replaceAllowed = rebuildAllowed({ mode: "rebuild", confirm: true, ...gate }).truncate;
   if (allowed.truncate) await applyProjection(projection);
 
   const warning = [
     input.assessment.warning,
+    safety.warning,
     input.mode === "verify" ? allowed.reason : allowed.truncate ? null : allowed.reason,
   ]
     .filter((line): line is string => Boolean(line))
@@ -832,6 +1062,10 @@ async function finishReport(input: {
       scoreVersions: projection.scoreVersions.length,
       memoryLog: projection.memoryLog.length,
     },
+    tables,
+    orphans: projection.orphans,
+    unappliedSeedPosts: input.stored.unappliedSeedIds,
+    replaceAllowed,
     coverage: {
       rawHits: input.rawHits,
       unique: input.assessment.memories.length,
@@ -850,7 +1084,7 @@ async function hydrateListed(
   const plan = contentPlan({
     memories: walk.memories,
     deleted: walk.deleted,
-    productNamespaces: Object.values(NS),
+    productNamespaces: plaintextNamespaces(),
   });
   const texts: HydratedText[] = [];
   let rawHits = 0;
@@ -883,19 +1117,27 @@ async function hydrateListed(
   return { texts, rawHits };
 }
 
+/** Product namespaces whose plaintext rebuild must load. Score is derived. */
+export function plaintextNamespaces(): string[] {
+  return Object.values(NS).filter((namespace) => namespace !== NS.score);
+}
+
 export async function rebuildProjection(opts?: {
   mode?: "verify" | "rebuild";
   confirm?: boolean;
+  /** Replace even when a table would shrink. Does not bypass orphans or an unfinished seed. */
+  allowShrink?: boolean;
 }): Promise<ProjectionReport> {
   const mode = opts?.mode === "rebuild" ? "rebuild" : "verify";
   const confirm = opts?.confirm === true;
+  const allowShrink = opts?.allowShrink === true;
   const { listAllMemories } = await import("./memwal");
 
   let walk: ListWalkResult;
   try {
     walk = await listAllMemories();
   } catch (err) {
-    if (isListUnavailable(err)) return rebuildFromRecallFallback(mode, confirm);
+    if (isListUnavailable(err)) return rebuildFromRecallFallback(mode, confirm, allowShrink);
     return unfinishedReport({
       mode,
       enumeration: "list",
@@ -909,6 +1151,7 @@ export async function rebuildProjection(opts?: {
     walk,
     texts: hydrated.texts,
     productNamespaces: Object.values(NS),
+    plaintextNamespaces: plaintextNamespaces(),
     ...(hydrated.hydrationError ? { hydrationError: hydrated.hydrationError } : {}),
   });
   const stored = await readStoredRows();
@@ -926,6 +1169,7 @@ export async function rebuildProjection(opts?: {
     assessment,
     rawHits: hydrated.rawHits,
     extraNotes,
+    allowShrink,
     stored,
   });
 }
@@ -933,6 +1177,7 @@ export async function rebuildProjection(opts?: {
 async function rebuildFromRecallFallback(
   mode: "verify" | "rebuild",
   confirm: boolean,
+  allowShrink: boolean,
 ): Promise<ProjectionReport> {
   const { recallMemory, listNamespaces } = await import("./memwal");
   const gathered = await gatherMemories((q) => recallMemory(q));
@@ -981,6 +1226,7 @@ async function rebuildFromRecallFallback(
     rawHits: gathered.rawHits,
     extraNotes: [],
     duplicatesDropped: gathered.duplicatesDropped,
+    allowShrink,
     stored,
   });
 }
@@ -989,11 +1235,14 @@ async function readStoredRows(): Promise<{
   sources: StoredSourceRow[];
   claims: StoredClaimRow[];
   resolutions: StoredResolutionRow[];
+  scoreVersionCount: number;
+  unappliedSeedIds: string[];
 }> {
   const { getDb } = await import("./db");
   const schema = await import("./db/schema");
+  const { isNull, sql } = await import("drizzle-orm");
   const db = getDb();
-  const [sources, claims, resolutions] = await Promise.all([
+  const [sources, claims, resolutions, scoreRows, unapplied] = await Promise.all([
     db
       .select({
         id: schema.sources.id,
@@ -1019,8 +1268,16 @@ async function readStoredRows(): Promise<{
         outcome: schema.resolutions.outcome,
       })
       .from(schema.resolutions),
+    db.select({ n: sql<number>`count(*)::int` }).from(schema.scoreVersions),
+    db.select({ id: schema.seedPosts.id }).from(schema.seedPosts).where(isNull(schema.seedPosts.appliedAt)),
   ]);
-  return { sources, claims, resolutions };
+  return {
+    sources,
+    claims,
+    resolutions,
+    scoreVersionCount: Number(scoreRows[0]?.n ?? 0),
+    unappliedSeedIds: unapplied.map((row) => row.id),
+  };
 }
 
 async function applyProjection(p: Projection): Promise<void> {

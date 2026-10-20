@@ -308,6 +308,28 @@ describe("live memories and coverage", () => {
     expect(thrown.memories).toHaveLength(1);
   });
 
+  it("does not require plaintext for a namespace marked as derived", () => {
+    const walk = {
+      memories: [
+        listed({ memoryId: "c1", namespaceId: "walkback.claim", blobId: "c1" }),
+        listed({ memoryId: "s1", namespaceId: "walkback.score", blobId: "score-1" }),
+      ],
+      deleted: [],
+      pages: 1,
+      resyncs: 0,
+    };
+    const assessment = finishInventory({
+      walk,
+      texts: [{ blobId: "c1", text: "claim", namespace: "walkback.claim" }],
+      productNamespaces: ["walkback.claim", "walkback.score"],
+      plaintextNamespaces: ["walkback.claim"],
+    });
+    expect(assessment.coverageComplete).toBe(true);
+    expect(assessment.gaps).toEqual([]);
+    expect(assessment.listedByNamespace["walkback.score"]).toBe(1);
+    expect(assessment.memories.map((memory) => memory.blobId)).toEqual(["c1"]);
+  });
+
   it("uses inline list plaintext and ignores a blank blob id", () => {
     const walk = {
       memories: [
