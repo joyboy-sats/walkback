@@ -1,11 +1,24 @@
 /**
- * Proxy POST /api/rebuild to the Coolify API. The worker runs the rebuild.
- * This route returns `{ jobId }`.
+ * Enqueue a projection rebuild. The worker recalls Walrus and rewrites Postgres.
  */
-import { proxyWrite } from "@/lib/proxy-write";
+import { NextResponse } from "next/server";
+import { enqueueJob } from "@/lib/job-queue";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export function POST(req: Request) {
-  return proxyWrite("/rebuild", req);
+export async function POST() {
+  try {
+    const jobId = await enqueueJob("rebuild", {});
+    return NextResponse.json({ jobId }, { status: 202 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      {
+        error: "could not enqueue",
+        detail: message.includes("DATABASE_URL") ? message : "database unavailable",
+      },
+      { status: 500 },
+    );
+  }
 }

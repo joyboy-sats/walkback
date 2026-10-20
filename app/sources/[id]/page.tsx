@@ -6,7 +6,7 @@
  * be traceable to a verdict, and every verdict to a claim and its evidence.
  */
 import { notFound } from "next/navigation";
-import { ApiError, apiGet } from "@/lib/public-api";
+import { readSource } from "@/lib/reads";
 import { MIN_SAMPLE, TRUST_MUTED, trustBand } from "@/lib/score";
 
 interface SourceDetail {
@@ -44,14 +44,17 @@ export default async function SourcePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  let detail: SourceDetail;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    notFound();
+  }
+  let detail: SourceDetail | null;
   try {
-    detail = await apiGet<SourceDetail>(`/sources/${id}`);
+    detail = await readSource(id);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) notFound();
     const message = err instanceof Error ? err.message : String(err);
     return <p className="text-sm text-[var(--bad)]">{message}</p>;
   }
+  if (!detail) notFound();
 
   const { source, versions, claims } = detail;
 

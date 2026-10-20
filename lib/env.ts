@@ -23,12 +23,17 @@ if (typeof window !== "undefined") {
 
 const hex64 = /^0x[0-9a-fA-F]{64}$/;
 
+const delegateKey = z
+  .string()
+  .min(32, "delegate private key looks truncated")
+  .refine((v) => !v.includes("://"), "expected a key, not a URL");
+
 const schema = z.object({
-  MEMWAL_ACCOUNT_ID: z.string().regex(hex64, "must be 0x + 64 hex chars"),
-  MEMWAL_PRIVATE_KEY: z
-    .string()
-    .min(32, "delegate private key looks truncated")
-    .refine((v) => !v.includes("://"), "expected a key, not a URL"),
+  // Optional here so the Vercel process can read Postgres and enqueue jobs
+  // without the delegate key. The worker calls requireDelegateKey() before
+  // it writes.
+  MEMWAL_ACCOUNT_ID: z.string().regex(hex64, "must be 0x + 64 hex chars").optional(),
+  MEMWAL_PRIVATE_KEY: delegateKey.optional(),
   MEMWAL_SERVER_URL: z
     .string()
     .url()
@@ -69,4 +74,21 @@ export function env(): Env {
 /** For the replay-mode demo: proves no live call is attempted. */
 export function isReplay(): boolean {
   return env().DEMO_MODE === "replay";
+}
+
+/**
+ * The Walrus delegate key. Required on the worker and on seed. Absent on Vercel.
+ */
+export function requireDelegateKey(): { accountId: string; privateKey: string; serverUrl: string } {
+  const e = env();
+  if (!e.MEMWAL_ACCOUNT_ID || !e.MEMWAL_PRIVATE_KEY) {
+    throw new Error(
+      "MEMWAL_ACCOUNT_ID and MEMWAL_PRIVATE_KEY are required on the worker. Leave them unset on Vercel.",
+    );
+  }
+  return {
+    accountId: e.MEMWAL_ACCOUNT_ID,
+    privateKey: e.MEMWAL_PRIVATE_KEY,
+    serverUrl: e.MEMWAL_SERVER_URL,
+  };
 }

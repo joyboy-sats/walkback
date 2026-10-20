@@ -27,7 +27,7 @@
 import "server-only";
 
 import { MemWal } from "@mysten-incubation/memwal";
-import { env, isReplay } from "./env";
+import { isReplay, requireDelegateKey } from "./env";
 import { memwalWriteLimiter } from "./ratelimit";
 import type { Namespace } from "./types";
 
@@ -38,11 +38,11 @@ let client: MemWal | null = null;
 
 function getClient(): MemWal {
   if (client) return client;
-  const e = env();
+  const e = requireDelegateKey();
   client = MemWal.create({
-    key: e.MEMWAL_PRIVATE_KEY,
-    accountId: e.MEMWAL_ACCOUNT_ID,
-    serverUrl: e.MEMWAL_SERVER_URL,
+    key: e.privateKey,
+    accountId: e.accountId,
+    serverUrl: e.serverUrl,
     requestTimeoutMs: 30_000,
   });
   return client;

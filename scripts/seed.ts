@@ -15,7 +15,10 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 import { readFile } from "node:fs/promises";
+import { requireDelegateKey } from "../lib/env";
 import { finishSeed, runSeed } from "../lib/seed-run";
+
+requireDelegateKey();
 
 const file = process.argv[2] ?? "data/claims.json";
 

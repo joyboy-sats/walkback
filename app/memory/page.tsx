@@ -8,7 +8,7 @@
  * count the memories and see that they exist on mainnet, not just that the app
  * claims to have written them.
  */
-import { apiGet } from "@/lib/public-api";
+import { readMemory } from "@/lib/reads";
 import RebuildButton from "./rebuild-button";
 
 interface MemoryView {
@@ -19,8 +19,6 @@ interface MemoryView {
     blobId: string;
     textPreview: string;
   }>;
-  namespaces: Array<{ name: string; memoryCount: number; storageUsed: number }>;
-  nsError: string | null;
   limitation: string;
 }
 
@@ -30,14 +28,12 @@ export default async function MemoryPage() {
   let view: MemoryView | null = null;
   let loadError: string | null = null;
   try {
-    view = await apiGet<MemoryView>("/memory");
+    view = await readMemory();
   } catch (err) {
     loadError = err instanceof Error ? err.message : String(err);
   }
 
   const rows = view?.rows ?? [];
-  const namespaces = view?.namespaces ?? [];
-  const nsError = view?.nsError ?? null;
   const limitation = view?.limitation ?? "";
 
   const byKind = rows.reduce<Record<string, number>>((acc, r) => {
@@ -73,32 +69,10 @@ export default async function MemoryPage() {
 
       <section className="mt-4 border border-[var(--line)] rounded-lg p-4">
         <h2 className="text-sm text-[var(--dim)]">on the relayer</h2>
-        {nsError ? (
-          <p className="mt-2 text-sm text-[var(--bad)]">{nsError}</p>
-        ) : namespaces.length === 0 ? (
-          <p className="mt-2 text-sm text-[var(--void)]">No namespaces yet.</p>
-        ) : (
-          <table className="mt-3 w-full text-sm">
-            <thead className="text-xs text-[var(--void)]">
-              <tr className="text-left">
-                <th className="font-normal py-1">namespace</th>
-                <th className="font-normal py-1 text-right">memories</th>
-                <th className="font-normal py-1 text-right">bytes</th>
-              </tr>
-            </thead>
-            <tbody className="mono">
-              {namespaces.map((n) => (
-                <tr key={n.name} className="border-t border-[var(--line)]">
-                  <td className="py-1.5">{n.name}</td>
-                  <td className="py-1.5 text-right">{n.memoryCount}</td>
-                  <td className="py-1.5 text-right text-[var(--dim)]">
-                    {n.storageUsed.toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <p className="mt-2 text-sm max-w-2xl">
+          Namespace counts live with the delegate key on the worker. This page
+          lists the projection’s memory log, which is rebuilt from those writes.
+        </p>
       </section>
 
       <section className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--dim)]">

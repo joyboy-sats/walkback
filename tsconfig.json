@@ -35,6 +35,7 @@
     "scripts/**/*.ts",
     "lib/**/*.ts",
     "backend/**/*.ts",
+    "worker/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
     "next.config.ts",

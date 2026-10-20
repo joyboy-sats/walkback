@@ -109,7 +109,7 @@ export default function IngestPage() {
         throw new Error(queued?.detail || queued?.error || `ingest failed (${res.status})`);
       }
       const job = await pollJob(queued.jobId, setJobStatus, () => cancel.current);
-      if (job.status === "error") throw new Error(job.error || "ingest failed");
+      if (job.status === "failed") throw new Error(job.error || "ingest failed");
       const done = job.result as IngestResponse | null;
       if (!done || !Array.isArray(done.claims)) {
         throw new Error("ingest finished without a result");
@@ -211,7 +211,7 @@ export default function IngestPage() {
             <span />
           </div>
           <p className="mt-3 text-sm text-[var(--dim)]">
-            {jobStatus === "queued"
+            {jobStatus === "pending"
               ? `Queued for the worker. Elapsed ${elapsed}s.`
               : `Working${jobStatus ? ` (${jobStatus})` : ""}. Extraction is quick; each memory write to Walrus takes about 6 seconds. Elapsed ${elapsed}s.`}
           </p>

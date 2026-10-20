@@ -1,11 +1,9 @@
 /**
- * Read models for the UI. The Vercel app cannot open Postgres, so these are
- * the responses behind GET /feed, GET /sources/:id and GET /memory.
+ * Read models for the Vercel pages. Selects only. Walrus writes happen in the worker.
  */
 import { asc, desc, eq } from "drizzle-orm";
-import { getDb, schema } from "../lib/db";
-import { listNamespaces } from "../lib/memwal";
-import { RECALL_ENUMERATION_LIMIT } from "../lib/projection-rebuild";
+import { getDb, schema } from "./db";
+import { RECALL_ENUMERATION_LIMIT } from "./projection-rebuild";
 
 export async function readFeed() {
   const db = getDb();
@@ -101,18 +99,6 @@ export async function readMemory() {
     .orderBy(desc(schema.memoryLog.writtenAt))
     .limit(200);
 
-  let namespaces: Array<{ name: string; memoryCount: number; storageUsed: number }> = [];
-  let nsError: string | null = null;
-  try {
-    namespaces = (await listNamespaces()).map((n) => ({
-      name: n.name,
-      memoryCount: n.memoryCount,
-      storageUsed: n.storageUsed,
-    }));
-  } catch (err) {
-    nsError = err instanceof Error ? err.message : String(err);
-  }
-
   return {
     rows: rows.map((r) => ({
       id: r.id,
@@ -121,8 +107,6 @@ export async function readMemory() {
       blobId: r.blobId,
       textPreview: r.textPreview,
     })),
-    namespaces,
-    nsError,
     limitation: RECALL_ENUMERATION_LIMIT,
   };
 }

@@ -1,5 +1,5 @@
 {
-  "id": "537b4a89-3a90-49de-8a2d-e79abdc9314a",
+  "id": "830dc105-1e61-4f87-b592-0303c73cc19e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -168,8 +168,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.jobs": {
-      "name": "jobs",
+    "public.ingest_jobs": {
+      "name": "ingest_jobs",
       "schema": "",
       "columns": {
         "id": {
@@ -186,19 +186,19 @@
           "primaryKey": false,
           "notNull": true
         },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
         "status": {
           "name": "status",
           "type": "job_status",
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'queued'"
-        },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
+          "default": "'pending'"
         },
         "result": {
           "name": "result",
@@ -212,8 +212,22 @@
           "primaryKey": false,
           "notNull": false
         },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true,
@@ -230,14 +244,26 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "jobs_status_created_idx": {
-          "name": "jobs_status_created_idx",
+        "ingest_jobs_claim_idx": {
+          "name": "ingest_jobs_claim_idx",
           "columns": [
             {
               "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "next_attempt_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -722,10 +748,10 @@
       "name": "job_status",
       "schema": "public",
       "values": [
-        "queued",
+        "pending",
         "running",
         "done",
-        "error"
+        "failed"
       ]
     },
     "public.memory_kind": {

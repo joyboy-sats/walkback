@@ -76,7 +76,7 @@ export default function RebuildButton() {
       }
       const job = await pollJob(queued.jobId, setJobStatus, () => cancel.current);
       if (cancel.current) return;
-      if (job.status === "error") {
+      if (job.status === "failed") {
         setPhase("error");
         setResult({ error: "rebuild failed", detail: job.error || "rebuild failed" });
         return;
@@ -109,7 +109,7 @@ export default function RebuildButton() {
             <span />
           </div>
           <p className="mt-3 text-sm text-[var(--dim)]">
-            {jobStatus === "queued" ? "Queued for the worker." : "Recalling memories and rebuilding the projection."}{" "}
+            {jobStatus === "pending" ? "Queued for the worker." : "Recalling memories and rebuilding the projection."}{" "}
             Elapsed {elapsed}s.
           </p>
         </div>

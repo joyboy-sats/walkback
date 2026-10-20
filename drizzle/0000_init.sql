@@ -1,7 +1,7 @@
 CREATE TYPE "public"."claim_status" AS ENUM('pending', 'resolved', 'void');--> statement-breakpoint
 CREATE TYPE "public"."claim_type" AS ENUM('balance_threshold', 'balance_change_since_ingest', 'tx_replay', 'price_threshold', 'manual');--> statement-breakpoint
 CREATE TYPE "public"."job_kind" AS ENUM('ingest', 'rebuild', 'resolve', 'restore');--> statement-breakpoint
-CREATE TYPE "public"."job_status" AS ENUM('queued', 'running', 'done', 'error');--> statement-breakpoint
+CREATE TYPE "public"."job_status" AS ENUM('pending', 'running', 'done', 'failed');--> statement-breakpoint
 CREATE TYPE "public"."memory_kind" AS ENUM('source', 'claim', 'resolution', 'score', 'digest', 'tombstone');--> statement-breakpoint
 CREATE TYPE "public"."outcome" AS ENUM('true', 'false', 'void');--> statement-breakpoint
 CREATE TYPE "public"."platform" AS ENUM('x', 'substack', 'rss', 'onchain', 'other');--> statement-breakpoint
@@ -21,16 +21,19 @@ CREATE TABLE "claims" (
 	"walrus_blob_id" text
 );
 --> statement-breakpoint
-CREATE TABLE "jobs" (
+CREATE TABLE "ingest_jobs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"kind" "job_kind" NOT NULL,
-	"status" "job_status" DEFAULT 'queued' NOT NULL,
 	"payload" jsonb NOT NULL,
+	"status" "job_status" DEFAULT 'pending' NOT NULL,
 	"result" jsonb,
 	"error" text,
+	"attempts" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"started_at" timestamp with time zone,
-	"finished_at" timestamp with time zone
+	"finished_at" timestamp with time zone,
+	"next_attempt_at" timestamp with time zone
 );
 --> statement-breakpoint
 CREATE TABLE "memory_log" (
@@ -89,7 +92,7 @@ ALTER TABLE "score_versions" ADD CONSTRAINT "score_versions_source_id_sources_id
 CREATE INDEX "claims_status_deadline_idx" ON "claims" USING btree ("status","deadline");--> statement-breakpoint
 CREATE INDEX "claims_source_idx" ON "claims" USING btree ("source_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "claims_external_id_uidx" ON "claims" USING btree ("external_id");--> statement-breakpoint
-CREATE INDEX "jobs_status_created_idx" ON "jobs" USING btree ("status","created_at");--> statement-breakpoint
+CREATE INDEX "ingest_jobs_claim_idx" ON "ingest_jobs" USING btree ("status","next_attempt_at","created_at");--> statement-breakpoint
 CREATE INDEX "memory_log_kind_idx" ON "memory_log" USING btree ("kind");--> statement-breakpoint
 CREATE INDEX "memory_log_blob_idx" ON "memory_log" USING btree ("blob_id");--> statement-breakpoint
 CREATE INDEX "resolutions_claim_idx" ON "resolutions" USING btree ("claim_id");--> statement-breakpoint

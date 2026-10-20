@@ -197,32 +197,38 @@ export const jobKindEnum = pgEnum("job_kind", [
 ]);
 
 export const jobStatusEnum = pgEnum("job_status", [
-  "queued",
+  "pending",
   "running",
   "done",
-  "error",
+  "failed",
 ]);
 
 /**
- * Work the Coolify API accepts and the worker performs.
+ * Queue between the Vercel routes and the Coolify worker.
  *
- * Walrus writes take seconds. The HTTP request only inserts a row; the worker
- * claims it with SKIP LOCKED and runs it. The UI polls `GET /jobs/:id`.
+ * A request inserts a row and returns its id. The worker claims one row with
+ * `FOR UPDATE SKIP LOCKED`, runs the Walrus write, and stores the result.
+ * `attempts` counts claims. A failure before the limit goes back to `pending`
+ * with `next_attempt_at` set; after the limit the row is `failed`.
  */
-export const jobs = pgTable(
-  "jobs",
+export const ingestJobs = pgTable(
+  "ingest_jobs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     kind: jobKindEnum("kind").notNull(),
-    status: jobStatusEnum("status").notNull().default("queued"),
     payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: jobStatusEnum("status").notNull().default("pending"),
     result: jsonb("result").$type<Record<string, unknown>>(),
     error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** When a retry may be claimed. Null means the row is due immediately. */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
   },
-  (t) => [index("jobs_status_created_idx").on(t.status, t.createdAt)],
+  (t) => [index("ingest_jobs_claim_idx").on(t.status, t.nextAttemptAt, t.createdAt)],
 );
 
 export type Source = typeof sources.$inferSelect;
@@ -230,4 +236,4 @@ export type Claim = typeof claims.$inferSelect;
 export type Resolution = typeof resolutions.$inferSelect;
 export type ScoreVersion = typeof scoreVersions.$inferSelect;
 export type MemoryLogRow = typeof memoryLog.$inferSelect;
-export type Job = typeof jobs.$inferSelect;
+export type IngestJob = typeof ingestJobs.$inferSelect;
