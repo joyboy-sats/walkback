@@ -5,9 +5,9 @@
  * wrong is *visible as demoted*, and one that is below the mute threshold is
  * collapsed rather than shown normally.
  *
- * Server component. Rows come from Postgres. Walrus writes run on the worker.
+ * Server component. Rows come from the Coolify API over HTTP.
  */
-import { readFeed } from "@/lib/reads";
+import { apiGet } from "@/lib/public-api";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
 
 interface FeedRow {
@@ -53,7 +53,7 @@ export default async function FeedPage() {
   let rows: FeedRow[] = [];
   let loadError: string | null = null;
   try {
-    rows = await readFeed();
+    rows = await apiGet<FeedRow[]>("/feed");
   } catch (err) {
     loadError = err instanceof Error ? err.message : String(err);
   }

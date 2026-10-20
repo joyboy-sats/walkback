@@ -1,21 +1,15 @@
-# Coolify worker. Walrus writes run in this process and nowhere else.
+# Same image as the root Dockerfile. Only the command differs.
+# Point a second Coolify service at this file, or reuse the API image and set
+# the start command to the CMD below. No port.
 #
-# Build:
 #   docker build -f Dockerfile.worker -t walkback-worker .
-# Start (also the image CMD):
-#   node --conditions=react-server --import tsx worker/index.ts
-#
-# `--conditions=react-server` is required. The database client imports
-# `server-only`, which throws under plain Node.
-#
-# No port and no HEALTHCHECK. The process does not serve HTTP.
+#   docker run --env-file worker.env walkback-worker
 
 FROM node:22-bookworm-slim
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-# tsx is a devDependency. Install it even when the builder sets NODE_ENV=production.
 RUN npm ci --include=dev
 
 COPY . .

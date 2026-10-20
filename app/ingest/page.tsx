@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { pollJob } from "@/lib/public-api";
+import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
+import { apiPost, pollJob } from "@/lib/public-api";
 
 /**
  * Paste a post and see exactly what ingest kept.
@@ -91,24 +92,26 @@ export default function IngestPage() {
     setJobStatus(null);
 
     try {
-      const res = await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      const token = askAdminToken();
+      const res = await apiPost(
+        "/ingest",
+        {
           handle: handle.trim(),
           platform,
           text,
           publishedAt: new Date(publishedAt).toISOString(),
           ...(address ? { suiAddress: address } : {}),
-        }),
-      });
-      const queued = (await res.json().catch(() => null)) as
-        | { jobId?: string; error?: string; detail?: string }
-        | null;
-      if (!res.ok || !queued?.jobId) {
-        throw new Error(queued?.detail || queued?.error || `ingest failed (${res.status})`);
+        },
+        token,
+      );
+      if (res.status === 401) {
+        clearAdminToken();
+        throw new Error("Admin token was rejected. Submit again and enter the Coolify ADMIN_TOKEN.");
       }
-      const job = await pollJob(queued.jobId, setJobStatus, () => cancel.current);
+      if (res.status >= 400 || !res.body?.jobId) {
+        throw new Error(res.body?.detail || res.body?.error || `ingest failed (${res.status})`);
+      }
+      const job = await pollJob(res.body.jobId, setJobStatus, () => cancel.current);
       if (job.status === "failed") throw new Error(job.error || "ingest failed");
       const done = job.result as IngestResponse | null;
       if (!done || !Array.isArray(done.claims)) {
@@ -133,6 +136,11 @@ export default function IngestPage() {
           Paste a post. Walkback extracts claims it can check against Sui, freezes
           a balance snapshot, and writes each one to Walrus Memory. Most posts
           contain nothing checkable. That comes back as zero claims, not as an error.
+        </p>
+        <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">
+          The first write in a tab asks for the admin token. That is ADMIN_TOKEN
+          on the Coolify backend. The browser keeps it in sessionStorage and sends
+          it as x-admin-token. Vercel does not store it.
         </p>
       </div>
 

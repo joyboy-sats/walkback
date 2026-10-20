@@ -8,7 +8,7 @@
  * count the memories and see that they exist on mainnet, not just that the app
  * claims to have written them.
  */
-import { readMemory } from "@/lib/reads";
+import { apiGet } from "@/lib/public-api";
 import RebuildButton from "./rebuild-button";
 
 interface MemoryView {
@@ -28,7 +28,7 @@ export default async function MemoryPage() {
   let view: MemoryView | null = null;
   let loadError: string | null = null;
   try {
-    view = await readMemory();
+    view = await apiGet<MemoryView>("/memory");
   } catch (err) {
     loadError = err instanceof Error ? err.message : String(err);
   }
@@ -57,7 +57,8 @@ export default async function MemoryPage() {
         <p className="mt-2 text-sm max-w-2xl">
           Drops the five Postgres tables and writes them again from the memories
           on Walrus. Scores are recomputed from verdicts. A void still does not
-          count.
+          count. The button asks for the admin token once per tab, the same
+          ADMIN_TOKEN the ingest page uses.
         </p>
         {loadError ? (
           <p className="mt-2 text-sm text-[var(--bad)]">{loadError}</p>

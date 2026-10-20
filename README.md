@@ -149,55 +149,80 @@ npm run seed
 
 ## Deployment
 
-Vercel runs the Next.js app: the pages, the read queries, and the routes that
-insert a job row. Coolify runs one long-lived process, the worker, plus
-Postgres. A Walrus write takes 6–24 seconds, so it never runs inside a request.
-`POST /api/ingest`, `POST /api/rebuild`, `POST /api/resolve`, and
-`POST /api/restore` insert into `ingest_jobs` and return `{ jobId }`. The
-browser polls `GET /api/jobs/[id]`. The worker claims one row at a time with
-`FOR UPDATE SKIP LOCKED` and calls the existing library code, which already
-goes through `memwalWriteLimiter`.
+Postgres runs on the Coolify internal network. Vercel cannot open it, so the
+Vercel app is only the Next.js UI. Every read and every enqueue goes over HTTP
+to a small API on Coolify. That API is `server/index.ts` (Node’s `http`
+module, no second framework and no second copy of Next.js). It reuses `lib/`
+for queries and for inserting `ingest_jobs`. The worker claims those rows and
+does the Walrus writes, which take 6–24 seconds and never run inside a request.
+
+`npm run check:vercel` (also part of `npm test`) fails if anything under `app/`
+reaches `lib/db` or `lib/env`, or reads a `process.env` name that is not
+`NEXT_PUBLIC_*`.
+
+One image, two Coolify services. The root `Dockerfile` starts the API. `Dockerfile.worker` is the same build with the worker command. You can also build the root file once and override the start command on the worker service.
 
 | Service | Where | Build / start | Port |
 |---|---|---|---|
-| Frontend and read routes | Vercel | `npm run build`, then Vercel’s start | Vercel |
-| Worker | Coolify | Dockerfile `Dockerfile.worker` | none |
-| Postgres | Coolify | internal service | 5432 on the private network |
-
-Worker image:
+| Frontend | Vercel | `npm run build` | Vercel |
+| API | Coolify | `Dockerfile` | **8080**, `GET /health` |
+| Worker | Coolify | `Dockerfile.worker`, or the API image with the worker command | none |
+| Postgres | Coolify | internal service | 5432, not public |
 
 ```bash
+docker build -f Dockerfile -t walkback .
+docker run -p 8080:8080 --env-file backend.env walkback
+
 docker build -f Dockerfile.worker -t walkback-worker .
-docker run --env-file /path/to/worker.env walkback-worker
+docker run --env-file worker.env walkback-worker
 ```
 
-The image command is `node --conditions=react-server --import tsx worker/index.ts`.
-Locally that is `npm run worker`. `--conditions=react-server` is required
-because the database client imports `server-only`. The worker applies
-`drizzle/` on boot. `npm run db:migrate` is the same migrator for a one-off
-on Coolify. There is no HTTP port and no health check.
+API command, also `npm run api`:
 
-Postgres stays on the Coolify network. The worker should use the internal
-hostname. The Vercel routes also open `DATABASE_URL` for reads and for
-inserting jobs, so the URL configured on Vercel has to be one Vercel can
-actually connect to. `MEMWAL_PRIVATE_KEY` is set on the worker only.
+`node --conditions=react-server --import tsx server/index.ts`
+
+Worker command, also `npm run worker`:
+
+`node --conditions=react-server --import tsx worker/index.ts`
+
+`--conditions=react-server` is required because the database client imports
+`server-only`. Both processes apply `drizzle/` on boot. `npm run db:migrate`
+is the same migrator for a one-off.
+
+Reads (`GET /feed`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
+Writes (`POST /ingest`, `/rebuild`, `/resolve`, `/restore`) require the header
+`x-admin-token: <ADMIN_TOKEN>`. CORS reflects `CORS_ORIGIN` only.
+
+The ingest page and the rebuild button ask for that token once per browser tab
+and keep it in `sessionStorage`. Vercel does not have a copy. Closing the tab
+drops it. A rejected token is cleared so the next submit asks again.
 
 ### Env vars on Vercel
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | Postgres URL reachable from Vercel. Reads and job insert. |
+| `NEXT_PUBLIC_API_URL` | Public origin of the Coolify API, no path, no trailing slash. Set before `next build`. Not a credential. |
 
-Leave `MEMWAL_PRIVATE_KEY`, `MEMWAL_ACCOUNT_ID`, `TATUM_API_KEY`, and
-`AI_GATEWAY_API_KEY` unset on Vercel.
+That is the only variable. No `DATABASE_URL`, no `ADMIN_TOKEN`, no provider keys.
+
+### Env vars on the Coolify API
+
+| Variable | Notes |
+|---|---|
+| `PORT` | `8080` |
+| `DATABASE_URL` | `postgres://…@<coolify-postgres-host>:5432/walkback` |
+| `ADMIN_TOKEN` | Shared secret, at least 16 characters. The owner types this into the browser. |
+| `CORS_ORIGIN` | The Vercel origin, for example `https://walkback.vercel.app`. Comma-separated if you have more than one. |
+
+The API does not need the Walrus or Tatum keys.
 
 ### Env vars on the Coolify worker
 
 | Variable | Notes |
 |---|---|
-| `DATABASE_URL` | `postgres://…@<coolify-postgres-host>:5432/walkback` |
+| `DATABASE_URL` | Same database, internal hostname |
 | `MEMWAL_ACCOUNT_ID` | `0x` + 64 hex |
-| `MEMWAL_PRIVATE_KEY` | Delegate private key. Worker only. |
+| `MEMWAL_PRIVATE_KEY` | Delegate private key |
 | `MEMWAL_SERVER_URL` | `https://relayer.memory.walrus.xyz` |
 | `TATUM_API_KEY` | From the Tatum dashboard |
 | `TATUM_SUI_RPC_URL` | `https://sui-mainnet.gateway.tatum.io` |

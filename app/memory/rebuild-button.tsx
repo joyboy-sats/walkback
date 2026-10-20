@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { pollJob } from "@/lib/public-api";
+import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
+import { apiPost, pollJob } from "@/lib/public-api";
 
 /**
  * Drop the projection and rebuild it from Walrus.
@@ -62,19 +63,21 @@ export default function RebuildButton() {
     setJobStatus(null);
     setResult(null);
     try {
-      const res = await fetch("/api/rebuild", { method: "POST" });
-      const queued = (await res.json().catch(() => null)) as
-        | { jobId?: string; error?: string; detail?: string }
-        | null;
-      if (!res.ok || !queued?.jobId) {
+      const token = askAdminToken();
+      const res = await apiPost("/rebuild", {}, token);
+      if (res.status === 401) clearAdminToken();
+      if (res.status === 401 || res.status >= 400 || !res.body?.jobId) {
         setPhase("error");
         setResult({
           error: "rebuild failed",
-          detail: queued?.detail || queued?.error || `request failed (${res.status})`,
+          detail:
+            res.status === 401
+              ? "Admin token was rejected. Click again and enter the Coolify ADMIN_TOKEN."
+              : res.body?.detail || res.body?.error || `request failed (${res.status})`,
         });
         return;
       }
-      const job = await pollJob(queued.jobId, setJobStatus, () => cancel.current);
+      const job = await pollJob(res.body.jobId, setJobStatus, () => cancel.current);
       if (cancel.current) return;
       if (job.status === "failed") {
         setPhase("error");

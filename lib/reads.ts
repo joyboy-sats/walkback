@@ -1,5 +1,5 @@
 /**
- * Read models for the Vercel pages. Selects only. Walrus writes happen in the worker.
+ * Read models for the Coolify API. Selects only. Walrus writes happen in the worker.
  */
 import { asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "./db";

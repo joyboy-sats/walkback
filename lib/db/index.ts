@@ -2,9 +2,8 @@
  * Postgres client — the queryable projection.
  *
  * Uses the `postgres` package (postgres.js), a standard Postgres driver.
- * The database is Postgres on the Coolify network. There is no Neon driver.
- * Vercel opens this URL for reads and for inserting jobs. The worker opens
- * it to claim those jobs. A normal `postgres://` URL works.
+ * The database is Postgres on the Coolify internal network. There is no Neon
+ * driver. Only the Coolify API and the worker open this URL. Vercel does not.
  *
  * Lazy singleton: importing this module never opens a connection at build time.
  */
