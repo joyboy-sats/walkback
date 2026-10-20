@@ -20,7 +20,7 @@ import { z } from "zod";
 import { boot } from "../backend/boot";
 import { ingestBody } from "../lib/ingest-body";
 import { enqueueJob, readJob } from "../lib/job-queue";
-import { corsHeaders, tokenMatches } from "../lib/http-guard";
+import { corsHeaders, preflightStatus, tokenMatches } from "../lib/http-guard";
 import { readFeed, readMemory, readSource } from "../lib/reads";
 import { NS } from "../lib/types";
 
@@ -30,6 +30,11 @@ const resolveBody = z.union([
   z.object({ claimId: z.string().uuid() }),
   z.object({ due: z.literal(true), limit: z.number().int().min(1).max(25).optional() }),
 ]);
+
+const rebuildBody = z.object({
+  mode: z.enum(["verify", "rebuild"]).optional(),
+  confirm: z.boolean().optional(),
+});
 
 const restoreBody = z.object({
   namespace: z.enum([NS.source, NS.claim, NS.resolution, NS.score, NS.digest, NS.tombstone]).optional(),
@@ -93,6 +98,12 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
   const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   const cors = corsHeaders(origin, cfg.origins);
   if (req.method === "OPTIONS") {
+    const status = preflightStatus(origin, cfg.origins);
+    if (status === 403) {
+      res.writeHead(403, { vary: "origin" });
+      res.end();
+      return;
+    }
     res.writeHead(204, cors);
     res.end();
     return;
@@ -163,7 +174,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
         return;
       }
       if (path === "/rebuild") {
-        const id = await enqueueJob("rebuild", {});
+        const parsed = rebuildBody.parse(raw);
+        const id = await enqueueJob("rebuild", {
+          mode: parsed.mode ?? "verify",
+          confirm: parsed.confirm === true,
+        });
         send(res, 202, { jobId: id }, cors);
         return;
       }

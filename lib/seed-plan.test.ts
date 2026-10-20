@@ -7,8 +7,8 @@ import {
   isSynthetic,
   materializeClaims,
   parseClaimsFile,
+  planSeedPost,
   plannedClaimIdentity,
-  postsToApply,
   SEED_BULK_MAX,
 } from "./seed-plan";
 
@@ -28,18 +28,76 @@ describe("data/claims.json", () => {
   });
 });
 
-describe("postsToApply", () => {
-  it("skips a post whose external ids are already stored, so a second run adds nothing", () => {
-    const first = postsToApply(file.posts, []);
-    expect(first.apply.map((p) => p.id)).toEqual(file.posts.map((p) => p.id));
-    expect(first.skip).toHaveLength(0);
+describe("planSeedPost", () => {
+  const sourceMissing = { exists: true, walrusBlobId: null, memoryLogged: false };
+  const sourceLogged = { exists: true, walrusBlobId: null, memoryLogged: true };
+  const sourceStamped = { exists: true, walrusBlobId: "blob-src", memoryLogged: true };
 
-    const existing = file.posts.flatMap((post) =>
-      (post.claims ?? [{ quote: "" }]).map((_, index) => plannedClaimIdentity(post.id, index).externalId),
-    );
-    const second = postsToApply(file.posts, existing);
-    expect(second.apply).toHaveLength(0);
-    expect(second.skip.map((p) => p.id)).toEqual(file.posts.map((p) => p.id));
+  it("treats a source row with no claims as unfinished, and writes the source memory once", () => {
+    const crashedBetweenInserts = planSeedPost({
+      expectedClaimCount: 1,
+      applied: false,
+      claims: [],
+      source: sourceMissing,
+    });
+    expect(crashedBetweenInserts.action).toBe("insert");
+    expect(crashedBetweenInserts.writeSourceMemory).toBe(true);
+    expect(crashedBetweenInserts.pendingClaimIndexes).toEqual([0]);
+
+    const memoryAlreadyLogged = planSeedPost({
+      expectedClaimCount: 1,
+      applied: false,
+      claims: [],
+      source: sourceLogged,
+    });
+    expect(memoryAlreadyLogged.action).toBe("insert");
+    expect(memoryAlreadyLogged.writeSourceMemory).toBe(false);
+  });
+
+  it("resumes only the claim memories that have no blob id", () => {
+    const decision = planSeedPost({
+      expectedClaimCount: 2,
+      applied: false,
+      claims: [
+        { index: 0, walrusBlobId: "blob-0" },
+        { index: 1, walrusBlobId: null },
+      ],
+      source: sourceStamped,
+    });
+    expect(decision.action).toBe("resume");
+    expect(decision.writeSourceMemory).toBe(false);
+    expect(decision.pendingClaimIndexes).toEqual([1]);
+  });
+
+  it("skips only when the applied marker is set, or when every memory is already persisted", () => {
+    const partial = planSeedPost({
+      expectedClaimCount: 1,
+      applied: false,
+      claims: [{ index: 0, walrusBlobId: null }],
+      source: sourceMissing,
+    });
+    expect(partial.action).toBe("resume");
+    expect(partial.writeSourceMemory).toBe(true);
+
+    const persistedWithoutMarker = planSeedPost({
+      expectedClaimCount: 1,
+      applied: false,
+      claims: [{ index: 0, walrusBlobId: "blob-0" }],
+      source: sourceStamped,
+    });
+    expect(persistedWithoutMarker.action).toBe("skip");
+    expect(persistedWithoutMarker.markApplied).toBe(true);
+    expect(persistedWithoutMarker.writeSourceMemory).toBe(false);
+
+    const marked = planSeedPost({
+      expectedClaimCount: 1,
+      applied: true,
+      claims: [{ index: 0, walrusBlobId: null }],
+      source: sourceMissing,
+    });
+    expect(marked.action).toBe("skip");
+    expect(marked.writeSourceMemory).toBe(false);
+    expect(marked.markApplied).toBe(false);
   });
 });
 

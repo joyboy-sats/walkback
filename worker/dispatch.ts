@@ -16,6 +16,8 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
   switch (job.kind) {
     case "ingest": {
       const body = job.payload as unknown as IngestBody;
+      // The job id is the post id, so a retry finds the claims this attempt
+      // already inserted and writes only the memories that have no blob id.
       return ingest({
         handle: body.handle,
         platform: body.platform,
@@ -23,10 +25,16 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
         publishedAt: body.publishedAt ?? new Date().toISOString(),
         ...(body.suiAddress ? { suiAddress: body.suiAddress } : {}),
         ...(body.displayName ? { displayName: body.displayName } : {}),
+        externalId: `job-${job.id}`,
       });
     }
-    case "rebuild":
-      return rebuildProjection();
+    case "rebuild": {
+      const payload = job.payload as { mode?: string; confirm?: boolean };
+      return rebuildProjection({
+        mode: payload.mode === "rebuild" ? "rebuild" : "verify",
+        confirm: payload.confirm === true,
+      });
+    }
     case "resolve": {
       const payload = job.payload as { claimId?: string; due?: boolean; limit?: number };
       if (payload.claimId) return resolveClaim(payload.claimId);

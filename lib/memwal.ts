@@ -27,6 +27,7 @@
 import "server-only";
 
 import { MemWal } from "@mysten-incubation/memwal";
+import { writeDurable, type DurableStepResult } from "./durable-writes";
 import { isReplay, requireDelegateKey } from "./env";
 import { memwalWriteLimiter } from "./ratelimit";
 import type { Namespace } from "./types";
@@ -95,18 +96,18 @@ export async function writeMemory(w: MemoryWrite): Promise<MemoryWriteResult> {
 }
 
 /**
- * Write many memories, splitting into calls the server accepts.
+ * Write many memories, one at a time, stopping at the first failure.
  *
- * Returns `results` **aligned with the input array**: `results[i]` is the
- * outcome for `items[i]`, with `error` set instead of `blobId` on failure.
- * Callers index into it directly, so never compact failures out.
+ * `RememberBulkItem` in 0.1.8 is `{ text, namespace }` — no idempotency key.
+ * `rememberBulkAndWait` returns partial blob ids on timeout, but a thrown
+ * poll error discards the ones already collected, and so does a crash. Those
+ * jobs can still complete on the relayer. Retrying the whole batch would
+ * append duplicates. This function uses `rememberAndWait` and `idempotencyKey`
+ * instead. Pass `onPersisted` to store each blob id before the next item is
+ * sent. Items after a failure are reported as `not attempted` and were not sent.
  *
- * Throws only when a whole batch fails, since that means the relayer is down
- * rather than one bad item.
- *
- * Note `rememberBulkAndWait` does not take idempotency keys — idempotency at
- * this level comes from the text being stable plus callers checking what is
- * already in Postgres.
+ * `BULK_MAX` remains the cap for a single relayer bulk call. This path does
+ * not use that call.
  */
 export interface BulkItemOutcome {
   id?: string;
@@ -115,7 +116,26 @@ export interface BulkItemOutcome {
   error?: string;
 }
 
-export async function writeMemoriesBulk(items: MemoryWrite[]): Promise<{
+export async function writeMemoriesDurable(
+  items: readonly MemoryWrite[],
+  onPersisted: (item: MemoryWrite, result: DurableStepResult) => Promise<void>,
+): Promise<{ error?: string }> {
+  if (isReplay()) throw new Error("writeMemoriesDurable called in replay mode.");
+  const { error } = await writeDurable(items, rememberOne, onPersisted);
+  return error ? { error } : {};
+}
+
+async function rememberOne(item: MemoryWrite): Promise<DurableStepResult> {
+  const res = await writeMemory(item);
+  return { blobId: res.blobId, id: res.id };
+}
+
+export async function writeMemoriesBulk(
+  items: MemoryWrite[],
+  opts?: {
+    onPersisted?: (item: MemoryWrite, result: DurableStepResult) => Promise<void>;
+  },
+): Promise<{
   results: BulkItemOutcome[];
 }> {
   if (isReplay()) {
@@ -126,37 +146,23 @@ export async function writeMemoriesBulk(items: MemoryWrite[]): Promise<{
     throw new Error("bulk write requires a single namespace; split by namespace first");
   }
 
-  const out: BulkItemOutcome[] = new Array(items.length);
+  const saved = new Map<string, DurableStepResult>();
+  const { error } = await writeMemoriesDurable(items, async (item, result) => {
+    if (opts?.onPersisted) await opts.onPersisted(item, result);
+    saved.set(item.idempotencyKey, result);
+  });
 
-  for (let offset = 0; offset < items.length; offset += BULK_MAX) {
-    const batch = items.slice(offset, offset + BULK_MAX);
-    // One token per item keeps the budget honest across mixed single/bulk traffic.
-    await memwalWriteLimiter.acquire(batch.length);
-
-    const res = await getClient().rememberBulkAndWait(
-      batch.map((it) => ({ text: it.text, namespace: it.namespace })),
-      { pollIntervalMs: 1000, timeoutMs: 300_000 },
-    );
-
-    if (res.succeeded === 0 && res.failed > 0) {
-      throw new Error(
-        `bulk write failed entirely at offset ${offset}: ` +
-          res.results.map((r) => r.error ?? r.status).join("; "),
-      );
+  let failed = false;
+  const results: BulkItemOutcome[] = items.map((item) => {
+    const hit = saved.get(item.idempotencyKey);
+    if (hit) return { id: hit.id, blobId: hit.blobId, namespace: item.namespace };
+    if (!failed) {
+      failed = true;
+      return { namespace: item.namespace, error: error ?? "write failed" };
     }
-
-    // The server returns one result per input item, in order.
-    res.results.forEach((r, i) => {
-      const abs = offset + i;
-      const namespace = batch[i]?.namespace ?? items[abs]!.namespace;
-      out[abs] =
-        r.status === "done" && r.blob_id
-          ? { id: r.id, blobId: r.blob_id, namespace: r.namespace || namespace }
-          : { namespace, error: r.error ?? r.status };
-    });
-  }
-
-  return { results: out };
+    return { namespace: item.namespace, error: "not attempted after an earlier failure" };
+  });
+  return { results };
 }
 
 export interface RecallHit {

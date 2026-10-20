@@ -36,11 +36,16 @@ import { stableUuid } from "./ids";
 export const RECALL_LIMIT = 200;
 
 export const RECALL_ENUMERATION_LIMIT =
-  "recall is similarity search, not a listing. This rebuild queries every " +
-  "namespace several times, dedupes on blob_id, and refuses to truncate the " +
-  "projection when listNamespaces reports more memories than came back. " +
-  "restore() returns counts, not text, and has no cursor, so it cannot " +
-  "enumerate either. A guaranteed rebuild needs a list-by-namespace API.";
+  "recall is top-K similarity search, not a listing. A memory that exists on " +
+  "Walrus can be absent from this report. matched / mismatched / missing-from-recall " +
+  "compare what recall returned with Postgres. missing-from-recall means recall did " +
+  "not surface the row; it does not mean Walrus lacks it. listNamespaces counts for " +
+  "walkback.smoke and walkback.timing are excluded. maxDistance is not set, because " +
+  "the SDK applies it client-side and a tight cap would drop hits. The projection " +
+  "is replaced only when product-namespace coverage is complete and replace is confirmed.";
+
+/** Namespaces written by scripts/smoke.ts and scripts/timing.ts. Not product data. */
+export const EXCLUDED_NAMESPACES = ["walkback.smoke", "walkback.timing"] as const;
 
 const PLATFORMS = ["x", "substack", "rss", "onchain", "other"] as const;
 type Platform = (typeof PLATFORMS)[number];
@@ -409,39 +414,63 @@ export interface TruncationDecision {
   truncate: boolean;
   warning: string | null;
   gaps: Array<{ namespace: string; recalled: number; reported: number }>;
+  /** Namespaces listNamespaces returned that are not part of the product schema. */
+  excludedNamespaces: string[];
+}
+
+const PRODUCT_NAMESPACES = new Set<string>(Object.values(NS));
+
+/**
+ * Split relayer counts into the six product namespaces and everything else.
+ * Test namespaces (`walkback.smoke`, `walkback.timing`) land in `excluded`
+ * and are not coverage gaps.
+ */
+export function partitionNamespaceCounts(reported: Record<string, number> | null): {
+  product: Record<string, number> | null;
+  excluded: string[];
+} {
+  if (!reported) return { product: null, excluded: [] };
+  const excluded = Object.keys(reported)
+    .filter((name) => !PRODUCT_NAMESPACES.has(name))
+    .sort();
+  const product: Record<string, number> = {};
+  for (const name of PRODUCT_NAMESPACES) product[name] = reported[name] ?? 0;
+  return { product, excluded };
 }
 
 /**
  * Whether it is safe to drop the projection.
  *
- * An empty recall must not wipe Postgres: there is nothing to rebuild from.
- * A missing count must not wipe it either, because we cannot tell a partial
- * recall from a complete one. A shortfall against `listNamespaces` is the
- * same refusal.
+ * An empty recall must not wipe Postgres. A missing count must not wipe it
+ * either. A shortfall on a product namespace is the same refusal. Counts in
+ * other namespaces, including the smoke and timing scripts, are ignored.
  */
 export function decideTruncation(input: {
   unique: number;
   recalledByNamespace: Record<string, number>;
   reportedByNamespace: Record<string, number> | null;
 }): TruncationDecision {
+  const { product, excluded } = partitionNamespaceCounts(input.reportedByNamespace);
   if (input.unique === 0) {
     return {
       truncate: false,
       gaps: [],
+      excludedNamespaces: excluded,
       warning: "recall returned no memories, so the projection was not modified.",
     };
   }
-  if (!input.reportedByNamespace) {
+  if (!product) {
     return {
       truncate: false,
       gaps: [],
+      excludedNamespaces: excluded,
       warning:
         "namespace counts could not be read, so completeness is unknown and the projection was not modified.",
     };
   }
   const gaps: TruncationDecision["gaps"] = [];
   for (const namespace of Object.values(NS)) {
-    const reported = input.reportedByNamespace[namespace] ?? 0;
+    const reported = product[namespace] ?? 0;
     const recalled = input.recalledByNamespace[namespace] ?? 0;
     if (recalled < reported) gaps.push({ namespace, recalled, reported });
   }
@@ -452,19 +481,206 @@ export function decideTruncation(input: {
     return {
       truncate: false,
       gaps,
+      excludedNamespaces: excluded,
       warning:
-        `recall did not return every indexed memory (${detail}). ` +
+        `recall did not return every indexed product memory (${detail}). ` +
         `The projection was not modified.`,
     };
   }
-  return { truncate: true, gaps: [], warning: null };
+  return { truncate: true, gaps: [], excludedNamespaces: excluded, warning: null };
 }
 
-export interface RebuildReport {
+export function rebuildAllowed(input: {
+  mode: "verify" | "rebuild";
+  confirm: boolean;
+  coverageComplete: boolean;
+}): { truncate: boolean; reason: string } {
+  if (input.mode !== "rebuild") {
+    return { truncate: false, reason: "verify reads Walrus and leaves Postgres as it is" };
+  }
+  if (!input.coverageComplete) {
+    return { truncate: false, reason: "coverage is incomplete, so the projection was not replaced" };
+  }
+  if (!input.confirm) {
+    return { truncate: false, reason: "coverage is complete; replace was not confirmed" };
+  }
+  return { truncate: true, reason: "coverage is complete and replace was confirmed" };
+}
+
+export interface StoredSourceRow {
+  id: string;
+  handle: string;
+  score: number;
+  hits: number;
+  misses: number;
+  walrusBlobId: string | null;
+}
+
+export interface StoredClaimRow {
+  id: string;
+  quote: string;
+  status: string;
+  synthetic: boolean;
+  walrusBlobId: string | null;
+}
+
+export interface StoredResolutionRow {
+  claimId: string;
+  outcome: string;
+}
+
+export interface VerifyComparison {
+  matched: number;
+  mismatched: number;
+  missingFromRecall: number;
+  recalledNotInPostgres: number;
+  mismatches: Array<{ kind: string; id: string; detail: string }>;
+  missing: Array<{ kind: string; id: string }>;
+  scores: Array<{
+    sourceId: string;
+    handle: string;
+    storedScore: number;
+    recomputedScore: number | null;
+    agree: boolean;
+  }>;
+  notes: string[];
+}
+
+/**
+ * Compare one recalled projection with the rows Postgres already has.
+ * Score agreement uses the score recomputed from recalled verdicts.
+ */
+export function compareWithStored(input: {
+  recalled: Projection;
+  sources: readonly StoredSourceRow[];
+  claims: readonly StoredClaimRow[];
+  resolutions: readonly StoredResolutionRow[];
+}): VerifyComparison {
+  const mismatches: VerifyComparison["mismatches"] = [];
+  const missing: VerifyComparison["missing"] = [];
+  let matched = 0;
+  let mismatched = 0;
+  let missingFromRecall = 0;
+
+  const recalledSources = new Map(input.recalled.sources.map((s) => [s.id, s]));
+  const recalledClaims = new Map(input.recalled.claims.map((c) => [c.id, c]));
+  const recalledResolutions = new Map(input.recalled.resolutions.map((r) => [r.claimId, r]));
+
+  for (const row of input.sources) {
+    const got = recalledSources.get(row.id);
+    if (!got) {
+      missingFromRecall++;
+      missing.push({ kind: "source", id: row.id });
+      continue;
+    }
+    if (got.handle !== row.handle) {
+      mismatched++;
+      mismatches.push({ kind: "source", id: row.id, detail: `handle ${row.handle} vs ${got.handle}` });
+    } else matched++;
+  }
+  for (const row of input.claims) {
+    const got = recalledClaims.get(row.id);
+    if (!got) {
+      missingFromRecall++;
+      missing.push({ kind: "claim", id: row.id });
+      continue;
+    }
+    const details: string[] = [];
+    if (got.quote !== row.quote) details.push("quote");
+    if (got.status !== row.status) details.push(`status ${row.status} vs ${got.status}`);
+    if (got.synthetic !== row.synthetic) details.push("synthetic");
+    if (row.walrusBlobId && got.walrusBlobId && row.walrusBlobId !== got.walrusBlobId) details.push("blob id");
+    if (details.length) {
+      mismatched++;
+      mismatches.push({ kind: "claim", id: row.id, detail: details.join(", ") });
+    } else matched++;
+  }
+  for (const row of input.resolutions) {
+    const got = recalledResolutions.get(row.claimId);
+    if (!got) {
+      missingFromRecall++;
+      missing.push({ kind: "resolution", id: row.claimId });
+      continue;
+    }
+    if (got.outcome !== row.outcome) {
+      mismatched++;
+      mismatches.push({
+        kind: "resolution",
+        id: row.claimId,
+        detail: `outcome ${row.outcome} vs ${got.outcome}`,
+      });
+    } else matched++;
+  }
+
+  const storedSourceIds = new Set(input.sources.map((s) => s.id));
+  const storedClaimIds = new Set(input.claims.map((c) => c.id));
+  const storedResolutionIds = new Set(input.resolutions.map((r) => r.claimId));
+  let recalledNotInPostgres = 0;
+  for (const row of input.recalled.sources) {
+    if (!storedSourceIds.has(row.id)) recalledNotInPostgres++;
+  }
+  for (const row of input.recalled.claims) {
+    if (!storedClaimIds.has(row.id)) recalledNotInPostgres++;
+  }
+  for (const row of input.recalled.resolutions) {
+    if (!storedResolutionIds.has(row.claimId)) recalledNotInPostgres++;
+  }
+
+  const notes = [
+    "missing-from-recall means recall did not surface the record. It does not mean Walrus lacks it.",
+  ];
+  const scores = input.sources.map((row) => {
+    const got = recalledSources.get(row.id);
+    if (!got) {
+      notes.push(
+        `${row.handle}: recall did not surface this source, so its stored score was not recomputed from verdicts`,
+      );
+      return {
+        sourceId: row.id,
+        handle: row.handle,
+        storedScore: row.score,
+        recomputedScore: null,
+        agree: false,
+      };
+    }
+    const agree =
+      Math.abs(got.score - row.score) < 1e-6 && got.hits === row.hits && got.misses === row.misses;
+    return {
+      sourceId: row.id,
+      handle: row.handle,
+      storedScore: row.score,
+      recomputedScore: got.score,
+      agree,
+    };
+  });
+
+  return {
+    matched,
+    mismatched,
+    missingFromRecall,
+    recalledNotInPostgres,
+    mismatches,
+    missing,
+    scores,
+    notes,
+  };
+}
+
+export interface ProjectionReport {
+  mode: "verify" | "rebuild";
   truncated: boolean;
   warning: string | null;
   limitation: string;
   notes: string[];
+  matched: number;
+  mismatched: number;
+  missingFromRecall: number;
+  recalledNotInPostgres: number;
+  mismatches: VerifyComparison["mismatches"];
+  missing: VerifyComparison["missing"];
+  scores: VerifyComparison["scores"];
+  coverageComplete: boolean;
+  excludedNamespaces: string[];
   duplicatesDropped: number;
   skipped: Array<{ blobId: string; reason: string }>;
   counts: {
@@ -484,11 +700,15 @@ export interface RebuildReport {
 }
 
 /**
- * Recall, parse, and — only when the recall looks complete — replace the
- * projection. Returns the row counts either way, with `truncated: false`
- * when the tables were left alone.
+ * Read Walrus and compare it with Postgres. The default mode is verify, which
+ * never truncates. `rebuild` replaces the projection only when coverage of the
+ * product namespaces is complete and `confirm` is set.
  */
-export async function rebuildProjection(): Promise<RebuildReport> {
+export async function rebuildProjection(opts?: {
+  mode?: "verify" | "rebuild";
+  confirm?: boolean;
+}): Promise<ProjectionReport> {
+  const mode = opts?.mode === "rebuild" ? "rebuild" : "verify";
   const { recallMemory, listNamespaces } = await import("./memwal");
   const gathered = await gatherMemories((q) => recallMemory(q));
 
@@ -508,25 +728,49 @@ export async function rebuildProjection(): Promise<RebuildReport> {
     recalledByNamespace: byNamespace,
     reportedByNamespace: reported,
   });
+  const stored = await readStoredRows();
+  const comparison = compareWithStored({
+    recalled: projection,
+    sources: stored.sources,
+    claims: stored.claims,
+    resolutions: stored.resolutions,
+  });
+  const allowed = rebuildAllowed({
+    mode,
+    confirm: opts?.confirm === true,
+    coverageComplete: decision.truncate,
+  });
 
-  const counts = {
-    sources: projection.sources.length,
-    claims: projection.claims.length,
-    resolutions: projection.resolutions.length,
-    scoreVersions: projection.scoreVersions.length,
-    memoryLog: projection.memoryLog.length,
-  };
+  if (allowed.truncate) await applyProjection(projection);
 
-  if (decision.truncate) await applyProjection(projection);
+  const warning = [decision.warning, mode === "verify" ? allowed.reason : allowed.truncate ? null : allowed.reason]
+    .filter((line): line is string => Boolean(line))
+    .join(" ");
 
   return {
-    truncated: decision.truncate,
-    warning: decision.warning,
+    mode,
+    truncated: allowed.truncate,
+    warning: warning || null,
     limitation: RECALL_ENUMERATION_LIMIT,
-    notes: projection.notes,
+    notes: [...comparison.notes, ...projection.notes],
+    matched: comparison.matched,
+    mismatched: comparison.mismatched,
+    missingFromRecall: comparison.missingFromRecall,
+    recalledNotInPostgres: comparison.recalledNotInPostgres,
+    mismatches: comparison.mismatches,
+    missing: comparison.missing,
+    scores: comparison.scores,
+    coverageComplete: decision.truncate,
+    excludedNamespaces: decision.excludedNamespaces,
     duplicatesDropped: gathered.duplicatesDropped + projection.duplicatesDropped,
     skipped: projection.skipped,
-    counts,
+    counts: {
+      sources: projection.sources.length,
+      claims: projection.claims.length,
+      resolutions: projection.resolutions.length,
+      scoreVersions: projection.scoreVersions.length,
+      memoryLog: projection.memoryLog.length,
+    },
     coverage: {
       rawHits: gathered.rawHits,
       unique: gathered.memories.length,
@@ -535,6 +779,44 @@ export async function rebuildProjection(): Promise<RebuildReport> {
       gaps: decision.gaps,
     },
   };
+}
+
+async function readStoredRows(): Promise<{
+  sources: StoredSourceRow[];
+  claims: StoredClaimRow[];
+  resolutions: StoredResolutionRow[];
+}> {
+  const { getDb } = await import("./db");
+  const schema = await import("./db/schema");
+  const db = getDb();
+  const [sources, claims, resolutions] = await Promise.all([
+    db
+      .select({
+        id: schema.sources.id,
+        handle: schema.sources.handle,
+        score: schema.sources.score,
+        hits: schema.sources.hits,
+        misses: schema.sources.misses,
+        walrusBlobId: schema.sources.walrusBlobId,
+      })
+      .from(schema.sources),
+    db
+      .select({
+        id: schema.claims.id,
+        quote: schema.claims.quote,
+        status: schema.claims.status,
+        synthetic: schema.claims.synthetic,
+        walrusBlobId: schema.claims.walrusBlobId,
+      })
+      .from(schema.claims),
+    db
+      .select({
+        claimId: schema.resolutions.claimId,
+        outcome: schema.resolutions.outcome,
+      })
+      .from(schema.resolutions),
+  ]);
+  return { sources, claims, resolutions };
 }
 
 async function applyProjection(p: Projection): Promise<void> {

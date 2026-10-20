@@ -14,10 +14,12 @@ import {
   claimNextJob,
   enqueueJob,
   hasOpenJob,
+  HEARTBEAT_MS,
   markJobDone,
   MAX_ATTEMPTS,
   recordJobFailure,
   requeueStaleJobs,
+  touchJob,
 } from "../lib/job-queue";
 import { boot } from "../backend/boot";
 import { dispatchJob } from "./dispatch";
@@ -88,6 +90,13 @@ while (!stop) {
 
   const started = Date.now();
   console.log(`[worker] claimed ${job.id} ${job.kind} attempt ${job.attempts}/${MAX_ATTEMPTS}`);
+  const beat = setInterval(() => {
+    void touchJob(job.id).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[worker] heartbeat failed for ${job.id}: ${message}`);
+    });
+  }, HEARTBEAT_MS);
+  beat.unref();
   try {
     const result = await dispatchJob(job);
     await markJobDone(job.id, result);
@@ -102,6 +111,8 @@ while (!stop) {
         `[worker] retry ${job.id} ${job.kind} in ${plan.delayMs}ms (attempt ${job.attempts}/${MAX_ATTEMPTS}): ${message}`,
       );
     }
+  } finally {
+    clearInterval(beat);
   }
 }
 

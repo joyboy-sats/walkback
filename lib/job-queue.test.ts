@@ -4,7 +4,9 @@ vi.mock("server-only", () => ({}));
 import {
   CLAIM_NEXT_JOB_SQL,
   MAX_ATTEMPTS,
+  STALE_RUNNING_MS,
   claimOne,
+  isStale,
   pickClaim,
   planFailure,
   retryDelayMs,
@@ -95,5 +97,27 @@ describe("retries", () => {
     expect(last.status).toBe("failed");
     expect(last.nextAttemptAt).toBeNull();
     expect(last.finishedAt).toEqual(NOW);
+  });
+});
+
+describe("heartbeat staleness", () => {
+  const staleMs = STALE_RUNNING_MS;
+
+  it("keeps a long-running job that is still heartbeating", () => {
+    const startedLongAgo = new Date(NOW.getTime() - 40 * 60 * 1000);
+    const recentBeat = new Date(NOW.getTime() - 60 * 1000);
+    expect(
+      isStale({ status: "running", updatedAt: recentBeat, startedAt: startedLongAgo } as {
+        status: "running";
+        updatedAt: Date;
+      }, NOW, staleMs),
+    ).toBe(false);
+  });
+
+  it("requeues a running job whose last heartbeat is older than the window", () => {
+    const old = new Date(NOW.getTime() - staleMs - 1);
+    expect(isStale({ status: "running", updatedAt: old }, NOW, staleMs)).toBe(true);
+    expect(isStale({ status: "running", updatedAt: null }, NOW, staleMs)).toBe(true);
+    expect(isStale({ status: "pending", updatedAt: old }, NOW, staleMs)).toBe(false);
   });
 });

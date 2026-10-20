@@ -60,11 +60,15 @@ export async function logMemories(
         namespace: r.namespace || w.namespace,
         blobId: r.blobId,
         serverId: r.id ?? null,
+        idempotencyKey: w.idempotencyKey,
         textPreview: w.text.replace(/\s+/g, " ").slice(0, 180),
       };
     })
     .filter((r): r is NonNullable<typeof r> => r !== null);
 
   if (rows.length === 0) return;
-  await getDb().insert(schema.memoryLog).values(rows);
+  await getDb()
+    .insert(schema.memoryLog)
+    .values(rows)
+    .onConflictDoNothing({ target: schema.memoryLog.idempotencyKey });
 }

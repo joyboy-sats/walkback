@@ -1,54 +1,34 @@
 /**
  * Run the seed file through ingest.
  *
- * Real posts are read, extracted (or taken from an explicit `claims` array)
- * and written with `writeMemoriesBulk`. A post whose external id is already
- * in the projection is skipped, so a second run does not append a second
- * copy. Bulk writes cannot carry an idempotency key — `RememberBulkItem` has
- * `text` and `namespace` only — so the skip is what keeps the ledger stable.
- * The keys are still derived from the post id and passed on every write the
- * single-memory path knows how to dedupe.
+ * Each post is planned from the applied marker, the claim blob ids, and
+ * whether the source memory is already logged. A partial run inserts the
+ * missing claims and writes only the memories that are not persisted. The
+ * marker is set after those writes succeed.
  *
- * `memwalWriteLimiter` sits inside `writeMemoriesBulk`. This module does not
- * talk to the SDK.
+ * Writes go through `persistIngestWrites`, which uses `rememberAndWait` and
+ * an idempotency key, one item at a time. Bulk items cannot carry that key.
  */
 import "server-only";
 
 import { getDb, schema, closeDb } from "./db";
-import { ingest, persistIngestWrites } from "./ingest";
-import { BULK_MAX, type MemoryWrite } from "./memwal";
+import { ingest, markSeedPostApplied, persistIngestWrites } from "./ingest";
 import { resolveDueClaims } from "./resolve";
 import {
-  chunk,
   formatSeedSummary,
   isSynthetic,
   materializeClaims,
   parseClaimsFile,
-  postsToApply,
   type SeedSummaryInput,
 } from "./seed-plan";
 
 export async function runSeed(raw: unknown): Promise<string> {
   const file = parseClaimsFile(raw);
-  const db = getDb();
+  let postsSeeded = 0;
+  let postsSkipped = 0;
 
-  const existing = await db
-    .select({ externalId: schema.claims.externalId })
-    .from(schema.claims);
-  const existingIds = existing
-    .map((r) => r.externalId)
-    .filter((id): id is string => Boolean(id));
-
-  const { apply, skip } = postsToApply(file.posts, existingIds);
-
-  const pending: MemoryWrite[] = [];
-  const sourced = new Set<string>();
-
-  for (const post of apply) {
+  for (const post of file.posts) {
     const claims = materializeClaims(post);
-    const includeSourceMemory = !sourced.has(post.handle);
-    sourced.add(post.handle);
-
     const result = await ingest({
       handle: post.handle,
       platform: post.platform,
@@ -60,33 +40,21 @@ export async function runSeed(raw: unknown): Promise<string> {
       synthetic: isSynthetic(post),
       externalId: post.id,
       deferMemories: true,
-      includeSourceMemory,
+      includeSourceMemory: true,
     });
 
-    if (result.pendingWrites) pending.push(...result.pendingWrites);
-  }
-
-  // Grouping is writeMemoriesBulk's rule (one namespace per call). Chunking
-  // at BULK_MAX is the relayer's rule (20 items). The helper chunks again;
-  // doing it here keeps a seed run from ever handing it more than that.
-  const byNamespace = new Map<string, MemoryWrite[]>();
-  for (const write of pending) {
-    const list = byNamespace.get(write.namespace) ?? [];
-    list.push(write);
-    byNamespace.set(write.namespace, list);
-  }
-  for (const group of byNamespace.values()) {
-    for (const batch of chunk(group, BULK_MAX)) {
-      await persistIngestWrites(batch);
-    }
+    if (result.pendingWrites?.length) await persistIngestWrites(result.pendingWrites);
+    if (result.needsMarker) await markSeedPostApplied(post.id, result.sourceId);
+    if (result.skipped && !result.needsMarker) postsSkipped++;
+    else postsSeeded++;
   }
 
   const resolved = await resolveDueClaims(new Date(), 200);
 
   const summary = await readSummary({
     postsRead: file.posts.length,
-    postsSeeded: apply.length,
-    postsSkipped: skip.length,
+    postsSeeded,
+    postsSkipped,
     realPosts: file.posts.filter((p) => !isSynthetic(p)).length,
     syntheticPosts: file.posts.filter((p) => isSynthetic(p)).length,
     resolveErrors: resolved.errors,
@@ -101,7 +69,14 @@ async function readSummary(
   const db = getDb();
   const [memories, sources, claims] = await Promise.all([
     db.select({ namespace: schema.memoryLog.namespace, blobId: schema.memoryLog.blobId }).from(schema.memoryLog),
-    db.select({ handle: schema.sources.handle, score: schema.sources.score, hits: schema.sources.hits, misses: schema.sources.misses }).from(schema.sources),
+    db
+      .select({
+        handle: schema.sources.handle,
+        score: schema.sources.score,
+        hits: schema.sources.hits,
+        misses: schema.sources.misses,
+      })
+      .from(schema.sources),
     db.select({ synthetic: schema.claims.synthetic }).from(schema.claims),
   ]);
 

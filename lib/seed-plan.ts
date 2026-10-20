@@ -103,24 +103,145 @@ export function isSynthetic(post: SeedPost): boolean {
   return post.synthetic === true;
 }
 
+export interface SeedClaimProgress {
+  index: number;
+  walrusBlobId: string | null;
+}
+
+export interface SeedSourceProgress {
+  exists: boolean;
+  walrusBlobId: string | null;
+  /** A source memory is already in memory_log for this source. */
+  memoryLogged: boolean;
+}
+
+export interface SeedPostDecision {
+  action: "skip" | "insert" | "resume";
+  /**
+   * Append a source memory on this run. False when a blob id or a memory_log
+   * row already proves one was persisted. A source row with neither is not
+   * proof: the source memory is written only after the claim rows exist, so
+   * a crash between those two inserts has not written one yet.
+   */
+  writeSourceMemory: boolean;
+  /**
+   * Claim indexes that still need a row or a blob id. Null when the post has
+   * no explicit claims and extraction still has to run.
+   */
+  pendingClaimIndexes: number[] | null;
+  /** Memories are already persisted. The caller sets the applied marker and writes nothing. */
+  markApplied: boolean;
+  reason: string;
+}
+
+export function claimIndexFromExternalId(externalId: string, postId: string): number | null {
+  const prefix = claimExternalPrefix(postId);
+  if (!externalId.startsWith(prefix)) return null;
+  const rest = externalId.slice(prefix.length);
+  if (!/^\d+$/.test(rest)) return null;
+  return Number(rest);
+}
+
+export function sourceMemoryAlreadyPersisted(source: SeedSourceProgress | null): boolean {
+  if (!source?.exists) return false;
+  return Boolean(source.walrusBlobId) || source.memoryLogged;
+}
+
 /**
- * Posts already present in the projection are not ingested again.
- * `existingExternalIds` are the `external_id` values already stored.
+ * What a seed rerun should do with one post.
+ *
+ * The applied marker is the only full skip, and it is written after every
+ * memory for the post has been persisted. A source row, or a claim row whose
+ * blob id is still null, is a partial run: insert the missing claims and
+ * write only the memories that are not already stored.
  */
-export function postsToApply(
-  posts: SeedPost[],
-  existingExternalIds: readonly string[],
-): { apply: SeedPost[]; skip: SeedPost[] } {
-  const existing = new Set(existingExternalIds);
-  const apply: SeedPost[] = [];
-  const skip: SeedPost[] = [];
-  for (const post of posts) {
-    const prefix = claimExternalPrefix(post.id);
-    const seen = [...existing].some((id) => id.startsWith(prefix));
-    if (seen) skip.push(post);
-    else apply.push(post);
+export function planSeedPost(input: {
+  expectedClaimCount: number | null;
+  applied: boolean;
+  claims: readonly SeedClaimProgress[];
+  source: SeedSourceProgress | null;
+}): SeedPostDecision {
+  const writeSourceMemory = !sourceMemoryAlreadyPersisted(input.source);
+
+  if (input.applied) {
+    return {
+      action: "skip",
+      writeSourceMemory: false,
+      pendingClaimIndexes: [],
+      markApplied: false,
+      reason: "post marker is set; memories were persisted on an earlier run",
+    };
   }
-  return { apply, skip };
+
+  if (input.expectedClaimCount === null) {
+    if (input.claims.length === 0) {
+      return {
+        action: "insert",
+        writeSourceMemory,
+        pendingClaimIndexes: null,
+        markApplied: false,
+        reason: writeSourceMemory
+          ? "new post"
+          : "source memory already persisted; extract and insert claims only",
+      };
+    }
+    const missing = input.claims.filter((c) => !c.walrusBlobId).map((c) => c.index);
+    if (missing.length === 0 && !writeSourceMemory) {
+      return {
+        action: "skip",
+        writeSourceMemory: false,
+        pendingClaimIndexes: [],
+        markApplied: true,
+        reason: "claims and source memory are persisted; marker was not set",
+      };
+    }
+    return {
+      action: "resume",
+      writeSourceMemory,
+      pendingClaimIndexes: missing,
+      markApplied: false,
+      reason: "some extracted memories are not persisted",
+    };
+  }
+
+  const missing: number[] = [];
+  const byIndex = new Map(input.claims.map((c) => [c.index, c]));
+  for (let i = 0; i < input.expectedClaimCount; i++) {
+    const row = byIndex.get(i);
+    if (!row || !row.walrusBlobId) missing.push(i);
+  }
+
+  const nothingLeft =
+    missing.length === 0 && !writeSourceMemory && (input.claims.length > 0 || input.expectedClaimCount === 0);
+  if (nothingLeft) {
+    return {
+      action: "skip",
+      writeSourceMemory: false,
+      pendingClaimIndexes: [],
+      markApplied: true,
+      reason: "every memory is persisted; marker was not set",
+    };
+  }
+
+  if (input.claims.length === 0) {
+    return {
+      action: "insert",
+      writeSourceMemory,
+      pendingClaimIndexes: missing,
+      markApplied: false,
+      reason: input.source?.exists
+        ? "source row exists from a partial run; claims were not inserted"
+        : "new post",
+    };
+  }
+
+  return {
+    action: "resume",
+    writeSourceMemory,
+    pendingClaimIndexes: missing,
+    markApplied: false,
+    reason: "partial seed; write only memories that are not persisted",
+  };
 }
 
 /** Split a write list into relayer-sized batches. Throws above the cap. */

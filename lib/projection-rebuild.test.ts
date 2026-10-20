@@ -12,9 +12,12 @@ vi.mock("server-only", () => ({}));
 
 import { claimMemory, resolutionMemory, scoreMemory, sourceMemory, tombstoneMemory } from "./memory-text";
 import {
+  compareWithStored,
   decideTruncation,
+  EXCLUDED_NAMESPACES,
   gatherMemories,
   projectMemories,
+  rebuildAllowed,
   recallPlan,
   type GatheredMemory,
   type RecallQuery,
@@ -407,5 +410,90 @@ describe("decideTruncation", () => {
     });
     expect(decision.truncate).toBe(true);
     expect(decision.gaps).toEqual([]);
+    expect(decision.excludedNamespaces).toContain("walkback.smoke");
+    expect(decision.gaps.some((g) => g.namespace === "walkback.smoke")).toBe(false);
+  });
+
+  it("does not treat smoke or timing counts as missing product memories", () => {
+    for (const name of EXCLUDED_NAMESPACES) {
+      expect(Object.values(NS)).not.toContain(name);
+    }
+    const recalledByNamespace = Object.fromEntries(Object.values(NS).map((ns) => [ns, 2]));
+    const reported: Record<string, number> = {
+      ...recalledByNamespace,
+      "walkback.smoke": 40,
+      "walkback.timing": 12,
+    };
+    reported[NS.claim] = 9;
+    const decision = decideTruncation({
+      unique: 20,
+      recalledByNamespace,
+      reportedByNamespace: reported,
+    });
+    expect(decision.truncate).toBe(false);
+    expect(decision.gaps.map((g) => g.namespace)).toEqual([NS.claim]);
+    expect(decision.excludedNamespaces).toEqual(["walkback.smoke", "walkback.timing"]);
+  });
+});
+
+describe("verify comparison", () => {
+  it("reports matches, a mismatched quote, rows recall missed, and recomputed scores", () => {
+    const world = buildWorld();
+    const recalled = projectMemories(world.memories);
+    const sources = recalled.sources.map((s) => ({
+      id: s.id,
+      handle: s.handle,
+      score: s.score,
+      hits: s.hits,
+      misses: s.misses,
+      walrusBlobId: s.walrusBlobId,
+    }));
+    const claims = recalled.claims.map((c) => ({
+      id: c.id,
+      quote: c.quote,
+      status: c.status,
+      synthetic: c.synthetic,
+      walrusBlobId: c.walrusBlobId,
+    }));
+    const resolutions = recalled.resolutions.map((r) => ({
+      claimId: r.claimId,
+      outcome: r.outcome,
+    }));
+
+    const intact = compareWithStored({ recalled, sources, claims, resolutions });
+    expect(intact.mismatched).toBe(0);
+    expect(intact.missingFromRecall).toBe(0);
+    expect(intact.scores.every((s) => s.agree)).toBe(true);
+    expect(intact.scores.map((s) => s.recomputedScore)).toEqual(sources.map((s) => s.score));
+    expect(intact.notes.join(" ")).toContain("does not mean Walrus lacks it");
+
+    const hidden = claims[0]!;
+    const missed = compareWithStored({
+      recalled: { ...recalled, claims: recalled.claims.filter((c) => c.id !== hidden.id) },
+      sources,
+      claims,
+      resolutions,
+    });
+    expect(missed.missingFromRecall).toBeGreaterThan(0);
+    expect(missed.missing).toContainEqual({ kind: "claim", id: hidden.id });
+
+    const tweaked = claims.map((c) => (c.id === hidden.id ? { ...c, quote: "a different quote" } : c));
+    const mismatch = compareWithStored({ recalled, sources, claims: tweaked, resolutions });
+    expect(mismatch.mismatched).toBe(1);
+    expect(mismatch.mismatches[0]?.detail).toContain("quote");
+
+    const drifted = sources.map((s) => ({ ...s, score: s.score + 0.25 }));
+    const scores = compareWithStored({ recalled, sources: drifted, claims, resolutions });
+    expect(scores.scores.every((s) => s.agree)).toBe(false);
+    expect(scores.scores.every((s) => s.recomputedScore !== null)).toBe(true);
+  });
+});
+
+describe("rebuildAllowed", () => {
+  it("replaces the projection only after complete coverage and an explicit confirm", () => {
+    expect(rebuildAllowed({ mode: "verify", confirm: true, coverageComplete: true }).truncate).toBe(false);
+    expect(rebuildAllowed({ mode: "rebuild", confirm: true, coverageComplete: false }).truncate).toBe(false);
+    expect(rebuildAllowed({ mode: "rebuild", confirm: false, coverageComplete: true }).truncate).toBe(false);
+    expect(rebuildAllowed({ mode: "rebuild", confirm: true, coverageComplete: true }).truncate).toBe(true);
   });
 });

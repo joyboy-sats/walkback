@@ -17,7 +17,21 @@ export type JobStatus = "pending" | "running" | "done" | "failed";
 export const MAX_ATTEMPTS = 3;
 export const RETRY_BASE_MS = 2_000;
 export const RETRY_CAP_MS = 60_000;
+/** A running job with no heartbeat for this long is abandoned. */
 export const STALE_RUNNING_MS = 20 * 60 * 1000;
+
+export function isStale(
+  job: { status: JobStatus; updatedAt: Date | null },
+  now: Date,
+  staleMs = STALE_RUNNING_MS,
+): boolean {
+  if (job.status !== "running") return false;
+  if (!job.updatedAt) return true;
+  return now.getTime() - job.updatedAt.getTime() >= staleMs;
+}
+
+/** A running job refreshes this so a long rebuild is not treated as abandoned. */
+export const HEARTBEAT_MS = 30_000;
 
 /**
  * One pending row, oldest first, skipping anything another worker already
@@ -198,8 +212,9 @@ export async function hasOpenJob(kind: JobKind): Promise<boolean> {
 }
 
 /**
- * A worker that died left the row `running`. Put it back through the same
- * retry rule. The attempt was already counted at claim time.
+ * A worker that died left the row `running`. Staleness is the last heartbeat
+ * (`updated_at`), not `started_at`: a rebuild can run longer than 20 minutes
+ * while the worker keeps touching the row.
  */
 export async function requeueStaleJobs(now = new Date(), staleMs = STALE_RUNNING_MS): Promise<number> {
   const db = getDb();
@@ -207,10 +222,18 @@ export async function requeueStaleJobs(now = new Date(), staleMs = STALE_RUNNING
   const rows = await db
     .select({ id: schema.ingestJobs.id, attempts: schema.ingestJobs.attempts })
     .from(schema.ingestJobs)
-    .where(and(eq(schema.ingestJobs.status, "running"), lt(schema.ingestJobs.startedAt, cutoff)));
+    .where(and(eq(schema.ingestJobs.status, "running"), lt(schema.ingestJobs.updatedAt, cutoff)));
 
   for (const row of rows) {
     await recordJobFailure(row.id, row.attempts, "worker stopped before the job finished", now);
   }
   return rows.length;
+}
+
+export async function touchJob(id: string, now = new Date()): Promise<void> {
+  const db = getDb();
+  await db
+    .update(schema.ingestJobs)
+    .set({ updatedAt: now })
+    .where(and(eq(schema.ingestJobs.id, id), eq(schema.ingestJobs.status, "running")));
 }

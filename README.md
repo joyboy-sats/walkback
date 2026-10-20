@@ -47,8 +47,10 @@ the system has two layers with different jobs:
 | Postgres on Coolify (private) | queryable projection: sources, claims, resolutions, score versions, jobs | fast reads for the UI |
 | Walrus Memory (mainnet) | every claim, verdict and score version, as narrative text | **system of record** |
 
-`restore()` rebuilds the projection from Walrus. That path exists specifically
-to prove the second row is the truth and the first is a cache.
+`restore()` and the Memory page read Walrus back. Verify compares that read
+with Postgres and leaves the tables in place. Replacing the projection happens
+only after that coverage check is complete. Walrus stays the system of record;
+Postgres is the cache.
 
 ## Adjudication contract
 
@@ -193,9 +195,11 @@ Reads (`GET /feed`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
 Writes (`POST /ingest`, `/rebuild`, `/resolve`, `/restore`) require the header
 `x-admin-token: <ADMIN_TOKEN>`. CORS reflects `CORS_ORIGIN` only.
 
-The ingest page and the rebuild button ask for that token once per browser tab
+The ingest page and the Memory page ask for that token once per browser tab
 and keep it in `sessionStorage`. Vercel does not have a copy. Closing the tab
-drops it. A rejected token is cleared so the next submit asks again.
+drops it. A rejected token is cleared so the next submit asks again. On
+Memory, verify is the button you press in a demo. Replace projection is
+enabled only after verify reports complete coverage.
 
 ### Env vars on Vercel
 

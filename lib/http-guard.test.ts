@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { corsHeaders, tokenMatches } from "./http-guard";
+import { corsHeaders, preflightStatus, tokenMatches } from "./http-guard";
 
 const SECRET = "test-secret-value";
 
@@ -31,5 +31,15 @@ describe("corsHeaders", () => {
 
   it("adds no allow-origin when the caller is not a browser", () => {
     expect(corsHeaders(undefined, allowed)["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+describe("preflightStatus", () => {
+  const allowed = ["https://walkback.vercel.app"];
+
+  it("rejects a browser origin that is not allowlisted", () => {
+    expect(preflightStatus("https://evil.example", allowed)).toBe(403);
+    expect(preflightStatus("https://walkback.vercel.app", allowed)).toBe(204);
+    expect(preflightStatus(undefined, allowed)).toBe(204);
   });
 });

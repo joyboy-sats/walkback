@@ -21,7 +21,10 @@ import "server-only";
 import { and, desc, eq, lte } from "drizzle-orm";
 import { adjudicate } from "./adjudicate";
 import { getDb, schema } from "./db";
-import { writeMemoriesBulk, type MemoryWrite } from "./memwal";
+import { exclusionVerdict } from "./scoring-exclusion";
+import { pendingWrites } from "./durable-writes";
+import { findPersistedKeys } from "./persisted-keys";
+import { writeMemoriesDurable, type MemoryWrite } from "./memwal";
 import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
 import { applyOutcome, computeScore, type ScoreSnapshot } from "./score";
@@ -80,16 +83,19 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
   }
 
   const snapshot = (claim.snapshot as BalanceSnapshot | null) ?? null;
+  const excluded = exclusionVerdict({ synthetic: claim.synthetic, params: claim.params });
 
-  const verdict = await adjudicate(
-    {
-      claimType: claim.claimType as ClaimType,
-      params: claim.params as unknown as ClaimParams,
-      snapshot,
-      deadline: claim.deadline.toISOString(),
-    },
-    now,
-  );
+  const verdict =
+    excluded ??
+    (await adjudicate(
+      {
+        claimType: claim.claimType as ClaimType,
+        params: claim.params as unknown as ClaimParams,
+        snapshot,
+        deadline: claim.deadline.toISOString(),
+      },
+      now,
+    ));
 
   // A void never moves the score, so it does not produce a score version.
   const before = computeScore(source.hits, source.misses);
@@ -144,23 +150,21 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
     });
   }
 
-  // Bulk even for two items: one round trip, one limiter charge per item.
-  // `results` is aligned with `writes`, not compacted on failure.
-  const { results } = await writeMemoriesBulk(writes);
-  const resolutionBlob = results[0]?.blobId;
-  const scoreBlob = scoreText ? results[1]?.blobId : undefined;
-
-  const failures = results.filter((r) => r.error);
-  if (failures.length) {
-    // Do not update the projection: an unprovable verdict must not become
-    // the system's belief. The claim stays pending and can be retried.
+  const known = await findPersistedKeys(writes);
+  const pending = pendingWrites(writes, known);
+  const blobs = new Map<string, string>();
+  const { error } = await writeMemoriesDurable(pending, async (write, result) => {
+    await logMemories([write], [{ id: result.id, blobId: result.blobId, namespace: write.namespace }]);
+    blobs.set(write.idempotencyKey, result.blobId);
+  });
+  if (error) {
     throw new Error(
-      `failed to persist ${failures.length} memory record(s) for claim ${claim.id}: ` +
-        failures.map((f) => f.error).join("; "),
+      `failed to persist a memory for claim ${claim.id} after ${blobs.size} new blob(s): ${error}`,
     );
   }
 
-  await logMemories(writes, results);
+  const resolutionBlob = blobs.get(resolutionText.key) ?? (await blobForKey(resolutionText.key));
+  const scoreBlob = scoreText ? (blobs.get(scoreText.key) ?? (await blobForKey(scoreText.key))) : undefined;
 
   await db.insert(schema.resolutions).values({
     claimId: claim.id,
@@ -279,16 +283,25 @@ export async function persistClaimMemories(claimId: string): Promise<string | un
     (row.claim.snapshot as BalanceSnapshot | null) ?? null,
   );
 
-  const { results } = await writeMemoriesBulk([
-    { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key },
-  ]);
-
-  const blobId = results[0]?.blobId;
+  const write = { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };
+  let blobId: string | undefined;
+  const { error } = await writeMemoriesDurable([write], async (item, result) => {
+    await logMemories([item], [{ id: result.id, blobId: result.blobId, namespace: item.namespace }]);
+    blobId = result.blobId;
+  });
+  if (error) throw new Error(`memory write stopped: ${error}`);
+  blobId = blobId ?? (await blobForKey(write.idempotencyKey)) ?? undefined;
   if (blobId) {
-    await db
-      .update(schema.claims)
-      .set({ walrusBlobId: blobId })
-      .where(eq(schema.claims.id, claimId));
+    await db.update(schema.claims).set({ walrusBlobId: blobId }).where(eq(schema.claims.id, claimId));
   }
   return blobId;
+}
+
+async function blobForKey(key: string): Promise<string | null> {
+  const [row] = await getDb()
+    .select({ blobId: schema.memoryLog.blobId })
+    .from(schema.memoryLog)
+    .where(eq(schema.memoryLog.idempotencyKey, key))
+    .limit(1);
+  return row?.blobId ?? null;
 }

@@ -180,14 +180,32 @@ export const memoryLog = pgTable(
     blobId: text("blob_id").notNull(),
     /** Server job/vector row id returned alongside blob_id. */
     serverId: text("server_id"),
+    /**
+     * `claim:{id}`, `source:{id}`, `resolution:{id}`, `score:{sourceId}:v{n}`.
+     * A retry skips a key that is already here. Null on rows rebuilt from
+     * recall, which do not carry the key.
+     */
+    idempotencyKey: text("idempotency_key"),
     textPreview: text("text_preview").notNull(),
     writtenAt: timestamp("written_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("memory_log_kind_idx").on(t.kind),
     index("memory_log_blob_idx").on(t.blobId),
+    uniqueIndex("memory_log_idempotency_key_uidx").on(t.idempotencyKey),
   ],
 );
+
+/**
+ * One row per seeded post. `applied_at` is set only after every memory for
+ * that post has been persisted. A rerun that sees the timestamp skips the
+ * post. A rerun that does not resumes whatever blob ids are still missing.
+ */
+export const seedPosts = pgTable("seed_posts", {
+  id: text("id").primaryKey(),
+  sourceId: uuid("source_id").references(() => sources.id, { onDelete: "cascade" }),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+});
 
 export const jobKindEnum = pgEnum("job_kind", [
   "ingest",
@@ -236,4 +254,5 @@ export type Claim = typeof claims.$inferSelect;
 export type Resolution = typeof resolutions.$inferSelect;
 export type ScoreVersion = typeof scoreVersions.$inferSelect;
 export type MemoryLogRow = typeof memoryLog.$inferSelect;
+export type SeedPostRow = typeof seedPosts.$inferSelect;
 export type IngestJob = typeof ingestJobs.$inferSelect;

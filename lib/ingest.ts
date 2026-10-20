@@ -16,21 +16,23 @@
  * passes `recordedSnapshot` and this step does not call Tatum.
  *
  * Steps 4 and 5 are split on purpose. The claim row is cheap; the memory write
- * is ~6s/item. A caller that cannot wait should `await` the insert and let the
- * memory write finish in the background — `walrusBlobId` staying null is the
- * signal that a claim is not yet durable. `deferMemories` is that split: the
- * seed script collects writes and flushes them with `writeMemoriesBulk` in
- * batches of 20.
+ * is ~6s/item. `deferMemories` returns the writes so the seed script can
+ * persist them one at a time. Each blob id is stamped before the next write.
+ * A seeded post is skipped only after `seed_posts.applied_at` is set, which
+ * happens once those writes have been recorded.
  */
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { getDb, schema } from "./db";
+import { pendingWrites } from "./durable-writes";
 import { extractClaims } from "./extract";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
 import { logMemories } from "./memory-log";
-import { writeMemoriesBulk, type MemoryWrite } from "./memwal";
+import { writeMemoriesDurable, type MemoryWrite } from "./memwal";
 import { claimMemory, sourceMemory } from "./memory-text";
+import { findPersistedKeys } from "./persisted-keys";
+import { claimIndexFromExternalId, planSeedPost, type SeedPostDecision } from "./seed-plan";
 import { getBalance } from "./tatum";
 import { NS } from "./types";
 import type {
@@ -101,6 +103,11 @@ export interface IngestResult {
   skipped?: string;
   /** Present only when `deferMemories` is set. The caller must persist these. */
   pendingWrites?: MemoryWrite[];
+  /**
+   * The seed marker is not set yet. The caller sets it after `pendingWrites`
+   * have been persisted. A skip that only needed the marker sets it here.
+   */
+  needsMarker?: boolean;
 }
 
 /** Find or create the source row for a handle. */
@@ -172,10 +179,34 @@ export async function takeSnapshot(
  */
 export async function ingest(input: IngestInput): Promise<IngestResult> {
   const db = getDb();
+  const seeded = input.externalId ? await loadSeedLedger(input.externalId, input.handle) : null;
 
-  if (input.externalId) {
-    const already = await findSeededPost(input.externalId);
-    if (already) return already;
+  if (input.externalId && seeded) {
+    const decision = planSeedPost({
+      expectedClaimCount: input.claims ? input.claims.length : null,
+      applied: seeded.applied,
+      claims: seeded.claims
+        .map((row) => ({
+          index: claimIndexFromExternalId(row.externalId ?? "", input.externalId!) ?? -1,
+          walrusBlobId: row.walrusBlobId,
+        }))
+        .filter((row) => row.index >= 0),
+      source: seeded.source
+        ? {
+            exists: true,
+            walrusBlobId: seeded.source.walrusBlobId,
+            memoryLogged: seeded.memoryLogged,
+          }
+        : null,
+    });
+    if (decision.action === "skip") {
+      if (decision.markApplied && seeded.source) {
+        await markSeedPostApplied(input.externalId, seeded.source.id);
+      }
+      return skippedResult(seeded, decision.reason);
+    }
+    const resumed = await resumeSeedPost(input, seeded, decision);
+    if (resumed) return resumed;
   }
 
   const source = await upsertSource(input, {
@@ -206,13 +237,6 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
     return true;
   });
 
-  // Re-check after extraction. Two calls racing on the same post id should
-  // not both insert, and the ids we are about to use are now known.
-  if (input.externalId) {
-    const already = await findSeededPost(input.externalId);
-    if (already) return already;
-  }
-
   // ── 2. snapshot before persisting ─────────────────────────────────────────
   const snapshot =
     "recordedSnapshot" in input
@@ -230,193 +254,356 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
   );
 
   // ── 3. persist claims ─────────────────────────────────────────────────────
-  const inserted = accepted.length
-    ? await db
-        .insert(schema.claims)
-        .values(
-          accepted.map((c, i) => {
-            const identity = identities[i];
-            return {
-              ...(identity ? { id: identity.id, externalId: identity.externalId } : {}),
-              sourceId: source.id,
-              quote: c.quote,
-              claimType: c.claimType,
-              params: c.params as unknown as Record<string, unknown>,
-              snapshot: snapshot as unknown as Record<string, unknown> | null,
-              deadline: new Date(c.deadline),
-              confidence: c.confidence,
-              status: "pending" as const,
-              synthetic,
-            };
-          }),
-        )
-        .returning({ id: schema.claims.id })
-    : [];
-
-  const stored: StoredClaim[] = inserted.map((row, i) => {
-    const c = accepted[i];
-    return {
-      id: row.id,
-      quote: c?.quote ?? "",
-      claimType: (c?.claimType ?? "manual") as ClaimType,
-      deadline: c ? new Date(c.deadline).toISOString() : "",
-      confidence: c?.confidence ?? 0,
-      synthetic,
-    };
-  });
-
-  // ── 4. write memories ─────────────────────────────────────────────────────
-  const writes: MemoryWrite[] = [];
-  const writeSource = input.includeSourceMemory !== false && !source.walrusBlobId;
-
-  if (writeSource) {
-    const srcMem = sourceMemory(
-      { id: source.id, handle: source.handle, platform: source.platform, ...(source.suiAddress ? { suiAddress: source.suiAddress } : {}) },
-      { createdAt: new Date().toISOString(), synthetic },
-    );
-    writes.push({ text: srcMem.text, namespace: NS.source, idempotencyKey: srcMem.key });
-  }
-
-  for (let i = 0; i < inserted.length; i++) {
-    const claim = inserted[i];
-    const c = accepted[i];
-    if (!claim || !c) continue;
-    const identity = identities[i];
-    const mem = claimMemory(
-      {
-        id: claim.id,
-        sourceHandle: source.handle,
-        claimType: c.claimType as ClaimType,
-        params: c.params as ClaimParams,
-        deadline: c.deadline,
+  let rows: ClaimRow[] = [];
+  if (accepted.length) {
+    const values = accepted.map((c, i) => {
+      const identity = identities[i];
+      return {
+        ...(identity ? { id: identity.id, externalId: identity.externalId } : {}),
+        sourceId: source.id,
+        quote: c.quote,
+        claimType: c.claimType,
+        params: c.params as unknown as Record<string, unknown>,
+        snapshot: snapshot as unknown as Record<string, unknown> | null,
+        deadline: new Date(c.deadline),
         confidence: c.confidence,
-      },
-      c,
-      snapshot,
-      {
+        status: "pending" as const,
         synthetic,
-        ...(identity ? { externalId: identity.externalId } : {}),
-      },
-    );
-    writes.push({
-      text: mem.text,
-      namespace: NS.claim,
-      idempotencyKey: mem.key,
+      };
     });
+    if (input.externalId) {
+      await db
+        .insert(schema.claims)
+        .values(values)
+        .onConflictDoNothing({ target: schema.claims.externalId });
+      rows = await reloadSeedClaims(input.externalId);
+    } else {
+      const inserted = await db.insert(schema.claims).values(values).returning({ id: schema.claims.id });
+      rows = inserted.map((row, i) => {
+        const c = accepted[i];
+        if (!c) throw new Error("claim insert did not line up with the extracted list");
+        return {
+          id: row.id,
+          sourceId: source.id,
+          quote: c.quote,
+          claimType: c.claimType,
+          params: c.params as unknown as Record<string, unknown>,
+          deadline: new Date(c.deadline),
+          confidence: c.confidence,
+          synthetic,
+          externalId: null,
+          snapshot: snapshot as unknown as Record<string, unknown> | null,
+          walrusBlobId: null,
+        };
+      });
+    }
   }
 
-  if (input.deferMemories) {
-    return {
-      sourceId: source.id,
-      claimIds: stored.map((c) => c.id),
-      claims: stored,
-      rejected,
-      snapshot,
-      memoryBlobIds: [],
-      pendingWrites: writes,
-    };
+  const sourceLogged =
+    Boolean(source.walrusBlobId) ||
+    Boolean(seeded?.memoryLogged) ||
+    (await sourceMemoryLogged(source.id));
+  const writes = writesForRows(source, rows, snapshot, synthetic, !sourceLogged && input.includeSourceMemory !== false);
+
+  return finishIngest(input, source.id, rows.map(toStoredClaim), rejected, snapshot, writes);
+}
+
+/**
+ * Send writes one at a time. Each blob id is logged and stamped before the
+ * next item is sent. Items already recorded are not sent again. A failure
+ * stops the rest; the successes stay recorded, so a retry continues there.
+ */
+export async function persistIngestWrites(writes: MemoryWrite[]): Promise<string[]> {
+  const known = await findPersistedKeys(writes);
+  const pending = pendingWrites(writes, known);
+  const fresh: string[] = [];
+  const { error } = await writeMemoriesDurable(pending, async (write, result) => {
+    await logMemories([write], [{ id: result.id, blobId: result.blobId, namespace: write.namespace }]);
+    await stampBlob(write.idempotencyKey, result.blobId);
+    fresh.push(result.blobId);
+  });
+  if (error) {
+    throw new Error(`memory write stopped after ${fresh.length} new blob(s): ${error}`);
   }
+  return fresh;
+}
 
-  const memoryBlobIds = await persistIngestWrites(writes);
+/** Set once every memory for the post has been persisted. */
+export async function markSeedPostApplied(postId: string, sourceId: string): Promise<void> {
+  const db = getDb();
+  await db
+    .insert(schema.seedPosts)
+    .values({ id: postId, sourceId, appliedAt: new Date() })
+    .onConflictDoUpdate({
+      target: schema.seedPosts.id,
+      set: { sourceId, appliedAt: new Date() },
+    });
+}
 
+const claimColumns = {
+  id: schema.claims.id,
+  sourceId: schema.claims.sourceId,
+  quote: schema.claims.quote,
+  claimType: schema.claims.claimType,
+  params: schema.claims.params,
+  deadline: schema.claims.deadline,
+  confidence: schema.claims.confidence,
+  synthetic: schema.claims.synthetic,
+  externalId: schema.claims.externalId,
+  snapshot: schema.claims.snapshot,
+  walrusBlobId: schema.claims.walrusBlobId,
+};
+
+interface ClaimRow {
+  id: string;
+  sourceId: string;
+  quote: string;
+  claimType: ClaimType;
+  params: Record<string, unknown>;
+  deadline: Date;
+  confidence: number;
+  synthetic: boolean;
+  externalId: string | null;
+  snapshot: Record<string, unknown> | null;
+  walrusBlobId: string | null;
+}
+
+interface SeedLedger {
+  applied: boolean;
+  claims: ClaimRow[];
+  source: { id: string; walrusBlobId: string | null } | null;
+  memoryLogged: boolean;
+}
+
+interface SourceRow {
+  id: string;
+  handle: string;
+  platform: SourceRef["platform"];
+  suiAddress?: string;
+  walrusBlobId: string | null;
+}
+
+async function loadSeedLedger(postId: string, handle: string): Promise<SeedLedger> {
+  const db = getDb();
+  const claims = await reloadSeedClaims(postId);
+  const [source] = await db
+    .select({ id: schema.sources.id, walrusBlobId: schema.sources.walrusBlobId })
+    .from(schema.sources)
+    .where(eq(schema.sources.handle, handle))
+    .limit(1);
+  const memoryLogged = source ? await sourceMemoryLogged(source.id) : false;
+  const [marker] = await db
+    .select({ appliedAt: schema.seedPosts.appliedAt })
+    .from(schema.seedPosts)
+    .where(eq(schema.seedPosts.id, postId))
+    .limit(1);
   return {
-    sourceId: source.id,
+    applied: Boolean(marker?.appliedAt),
+    claims,
+    source: source ?? null,
+    memoryLogged,
+  };
+}
+
+async function reloadSeedClaims(postId: string): Promise<ClaimRow[]> {
+  const prefix = claimExternalPrefix(postId);
+  const rows = await getDb()
+    .select(claimColumns)
+    .from(schema.claims)
+    .where(like(schema.claims.externalId, `${prefix}%`));
+  return rows
+    .map((row) => ({
+      ...row,
+      claimType: row.claimType as ClaimType,
+      params: (row.params ?? {}) as Record<string, unknown>,
+      snapshot: (row.snapshot as Record<string, unknown> | null) ?? null,
+    }))
+    .filter((row) => claimIndexFromExternalId(row.externalId ?? "", postId) !== null)
+    .sort(
+      (a, b) =>
+        claimIndexFromExternalId(a.externalId ?? "", postId)! -
+        claimIndexFromExternalId(b.externalId ?? "", postId)!,
+    );
+}
+
+async function sourceMemoryLogged(sourceId: string): Promise<boolean> {
+  const [row] = await getDb()
+    .select({ id: schema.memoryLog.id })
+    .from(schema.memoryLog)
+    .where(and(eq(schema.memoryLog.kind, "source"), eq(schema.memoryLog.refId, sourceId)))
+    .limit(1);
+  return Boolean(row);
+}
+
+/**
+ * Resume a partial seed. A first insert (no claim rows yet) returns null so
+ * the caller can extract and insert. Existing claim rows are not inserted again.
+ */
+async function resumeSeedPost(
+  input: IngestInput,
+  ledger: SeedLedger,
+  decision: SeedPostDecision,
+): Promise<IngestResult | null> {
+  if (decision.action !== "resume" || !input.externalId) return null;
+  const postId = input.externalId;
+  const source = await upsertSource(input, {
+    id: stableUuid(`source:${input.platform}:${input.handle}`),
+  });
+  const pending = new Set(decision.pendingClaimIndexes ?? []);
+  const have = new Set(
+    ledger.claims
+      .map((row) => claimIndexFromExternalId(row.externalId ?? "", postId))
+      .filter((index): index is number => index !== null),
+  );
+  const missing = [...pending].filter((index) => !have.has(index));
+  if (missing.length && input.claims) {
+    const snapshot =
+      "recordedSnapshot" in input ? (input.recordedSnapshot ?? null) : ((ledger.claims[0]?.snapshot as BalanceSnapshot | null) ?? null);
+    await getDb()
+      .insert(schema.claims)
+      .values(
+        missing.map((index) => {
+          const c = input.claims?.[index];
+          if (!c) throw new Error(`post ${postId} is missing claim ${index}`);
+          const externalId = claimExternalId(postId, index);
+          return {
+            id: stableUuid(externalId),
+            externalId,
+            sourceId: source.id,
+            quote: c.quote,
+            claimType: c.claimType,
+            params: c.params as unknown as Record<string, unknown>,
+            snapshot: snapshot as unknown as Record<string, unknown> | null,
+            deadline: new Date(c.deadline),
+            confidence: c.confidence,
+            status: "pending" as const,
+            synthetic: input.synthetic === true,
+          };
+        }),
+      )
+      .onConflictDoNothing({ target: schema.claims.externalId });
+  }
+
+  const rows = await reloadSeedClaims(postId);
+  const snapshot = (rows[0]?.snapshot as BalanceSnapshot | null) ?? null;
+  const logged = Boolean(source.walrusBlobId) || ledger.memoryLogged || (await sourceMemoryLogged(source.id));
+  const writes: MemoryWrite[] = [];
+  if (decision.writeSourceMemory && input.includeSourceMemory !== false && !logged) {
+    writes.push(sourceWrite(source, input.synthetic === true));
+  }
+  for (const row of rows) {
+    const index = claimIndexFromExternalId(row.externalId ?? "", postId);
+    if (index === null || !pending.has(index) || row.walrusBlobId) continue;
+    writes.push(claimWrite(row, source.handle, (row.snapshot as BalanceSnapshot | null) ?? snapshot));
+  }
+  return finishIngest(input, source.id, rows.map(toStoredClaim), [], snapshot, writes);
+}
+
+function writesForRows(
+  source: SourceRow,
+  rows: readonly ClaimRow[],
+  snapshot: BalanceSnapshot | null,
+  synthetic: boolean,
+  writeSource: boolean,
+): MemoryWrite[] {
+  const writes: MemoryWrite[] = [];
+  if (writeSource) writes.push(sourceWrite(source, synthetic));
+  for (const row of rows) {
+    if (row.walrusBlobId) continue;
+    writes.push(claimWrite(row, source.handle, (row.snapshot as BalanceSnapshot | null) ?? snapshot));
+  }
+  return writes;
+}
+
+function sourceWrite(source: SourceRow, synthetic: boolean): MemoryWrite {
+  const mem = sourceMemory(
+    {
+      id: source.id,
+      handle: source.handle,
+      platform: source.platform,
+      ...(source.suiAddress ? { suiAddress: source.suiAddress } : {}),
+    },
+    { createdAt: new Date().toISOString(), synthetic },
+  );
+  return { text: mem.text, namespace: NS.source, idempotencyKey: mem.key };
+}
+
+function claimWrite(row: ClaimRow, handle: string, snapshot: BalanceSnapshot | null): MemoryWrite {
+  const deadline = row.deadline.toISOString();
+  const params = row.params as unknown as ClaimParams;
+  const mem = claimMemory(
+    {
+      id: row.id,
+      sourceHandle: handle,
+      claimType: row.claimType,
+      params,
+      deadline,
+      confidence: row.confidence,
+    },
+    { quote: row.quote, claimType: row.claimType, params, deadline, confidence: row.confidence },
+    snapshot,
+    { synthetic: row.synthetic, ...(row.externalId ? { externalId: row.externalId } : {}) },
+  );
+  return { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };
+}
+
+async function finishIngest(
+  input: IngestInput,
+  sourceId: string,
+  stored: StoredClaim[],
+  rejected: Array<{ quote: string; reason: string }>,
+  snapshot: BalanceSnapshot | null,
+  writes: MemoryWrite[],
+): Promise<IngestResult> {
+  const base = {
+    sourceId,
     claimIds: stored.map((c) => c.id),
     claims: stored,
     rejected,
     snapshot,
-    memoryBlobIds,
+  };
+  if (input.deferMemories) {
+    return { ...base, memoryBlobIds: [], pendingWrites: writes, needsMarker: Boolean(input.externalId) };
+  }
+  const memoryBlobIds = writes.length ? await persistIngestWrites(writes) : [];
+  if (input.externalId) await markSeedPostApplied(input.externalId, sourceId);
+  return { ...base, memoryBlobIds, needsMarker: false };
+}
+
+function skippedResult(ledger: SeedLedger, reason: string): IngestResult {
+  const first = ledger.claims[0];
+  return {
+    sourceId: ledger.source?.id ?? first?.sourceId ?? "",
+    claimIds: ledger.claims.map((c) => c.id),
+    claims: ledger.claims.map(toStoredClaim),
+    rejected: [],
+    snapshot: (first?.snapshot as BalanceSnapshot | null) ?? null,
+    memoryBlobIds: ledger.claims.map((c) => c.walrusBlobId).filter((id): id is string => Boolean(id)),
+    skipped: reason,
+    needsMarker: false,
   };
 }
 
-/**
- * Send ingest writes to Walrus and stamp blob ids back onto the rows.
- *
- * One namespace per `writeMemoriesBulk` call, and that helper already splits
- * at 20 items. Callers that batch several posts should still pass the grouped
- * list through here rather than calling `writeMemory` in a loop.
- */
-export async function persistIngestWrites(writes: MemoryWrite[]): Promise<string[]> {
+function toStoredClaim(row: ClaimRow): StoredClaim {
+  return {
+    id: row.id,
+    quote: row.quote,
+    claimType: row.claimType,
+    deadline: row.deadline.toISOString(),
+    confidence: row.confidence,
+    synthetic: row.synthetic,
+  };
+}
+
+async function stampBlob(key: string, blobId: string): Promise<void> {
   const db = getDb();
-  const memoryBlobIds: string[] = [];
-  const claimBlobByKey = new Map<string, string>();
-  const sourceBlobByKey = new Map<string, string>();
-
-  const namespaces = [...new Set(writes.map((w) => w.namespace))];
-  for (const ns of namespaces) {
-    const batch = writes.filter((w) => w.namespace === ns);
-    if (!batch.length) continue;
-    const { results } = await writeMemoriesBulk(batch);
-    const bad = results.filter((r) => r.error);
-    if (bad.length) {
-      throw new Error(
-        `memory write failed for ${bad.length} ${ns} record(s): ` +
-          bad.map((b) => b.error).join("; "),
-      );
-    }
-    results.forEach((r, i) => {
-      if (!r.blobId) return;
-      memoryBlobIds.push(r.blobId);
-      const w = batch[i];
-      if (!w) return;
-      if (ns === NS.claim) claimBlobByKey.set(w.idempotencyKey, r.blobId);
-      if (ns === NS.source) sourceBlobByKey.set(w.idempotencyKey, r.blobId);
-    });
-
-    await logMemories(batch, results);
-  }
-
-  for (const [key, blobId] of claimBlobByKey) {
-    const id = key.startsWith("claim:") ? key.slice("claim:".length) : "";
-    if (!id) continue;
+  if (key.startsWith("claim:")) {
+    const id = key.slice("claim:".length);
     await db.update(schema.claims).set({ walrusBlobId: blobId }).where(eq(schema.claims.id, id));
+    return;
   }
-  for (const [key, blobId] of sourceBlobByKey) {
-    const id = key.startsWith("source:") ? key.slice("source:".length) : "";
-    if (!id) continue;
+  if (key.startsWith("source:")) {
+    const id = key.slice("source:".length);
     await db.update(schema.sources).set({ walrusBlobId: blobId }).where(eq(schema.sources.id, id));
   }
-
-  return memoryBlobIds;
-}
-
-async function findSeededPost(postId: string): Promise<IngestResult | null> {
-  const db = getDb();
-  const prefix = claimExternalPrefix(postId);
-  const rows = await db
-    .select({
-      id: schema.claims.id,
-      sourceId: schema.claims.sourceId,
-      quote: schema.claims.quote,
-      claimType: schema.claims.claimType,
-      deadline: schema.claims.deadline,
-      confidence: schema.claims.confidence,
-      synthetic: schema.claims.synthetic,
-      externalId: schema.claims.externalId,
-      snapshot: schema.claims.snapshot,
-      walrusBlobId: schema.claims.walrusBlobId,
-    })
-    .from(schema.claims);
-
-  const mine = rows.filter((r) => r.externalId?.startsWith(prefix));
-  const first = mine[0];
-  if (!first) return null;
-
-  const snapshot = (first.snapshot as BalanceSnapshot | null) ?? null;
-  return {
-    sourceId: first.sourceId,
-    claimIds: mine.map((r) => r.id),
-    claims: mine.map((r) => ({
-      id: r.id,
-      quote: r.quote,
-      claimType: r.claimType,
-      deadline: r.deadline.toISOString(),
-      confidence: r.confidence,
-      synthetic: r.synthetic,
-    })),
-    rejected: [],
-    snapshot,
-    memoryBlobIds: mine.map((r) => r.walrusBlobId).filter((id): id is string => Boolean(id)),
-    skipped: "already ingested",
-  };
 }

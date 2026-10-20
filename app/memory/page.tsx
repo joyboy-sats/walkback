@@ -53,12 +53,15 @@ export default async function MemoryPage() {
       </div>
 
       <section className="border border-[var(--line)] rounded-lg p-4">
-        <h2 className="text-sm text-[var(--dim)]">rebuild the projection</h2>
+        <h2 className="text-sm text-[var(--dim)]">verify against Walrus</h2>
         <p className="mt-2 text-sm max-w-2xl">
-          Drops the five Postgres tables and writes them again from the memories
-          on Walrus. Scores are recomputed from verdicts. A void still does not
-          count. The button asks for the admin token once per tab, the same
-          ADMIN_TOKEN the ingest page uses.
+          The primary action reads memories from Walrus and compares them with
+          Postgres, record by record. It reports what matched, what disagreed,
+          and what recall did not surface, plus the score recomputed from the
+          verdicts recall returned. It does not drop tables. Replacing the
+          projection stays unavailable until that coverage report is complete,
+          and it still asks you to confirm. The button asks for the admin token
+          once per tab, the same ADMIN_TOKEN the ingest page uses.
         </p>
         {loadError ? (
           <p className="mt-2 text-sm text-[var(--bad)]">{loadError}</p>

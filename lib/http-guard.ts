@@ -37,3 +37,15 @@ export function corsHeaders(
   }
   return headers;
 }
+
+/**
+ * Preflight from a browser origin that is not on the allow list is rejected.
+ * A request with no Origin is not a browser preflight and stays 204.
+ */
+export function preflightStatus(
+  requestOrigin: string | undefined,
+  allowed: readonly string[],
+): 204 | 403 {
+  if (requestOrigin && !allowed.includes(requestOrigin)) return 403;
+  return 204;
+}

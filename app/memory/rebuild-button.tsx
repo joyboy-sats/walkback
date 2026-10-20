@@ -5,26 +5,34 @@ import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
 import { apiPost, pollJob } from "@/lib/public-api";
 
 /**
- * Drop the projection and rebuild it from Walrus.
- *
- * The button reports row counts. If recall cannot show it saw every indexed
- * memory, the server leaves the tables alone and the warning says so.
+ * Verify is the demo action: read Walrus, compare it with Postgres, and
+ * leave the tables alone. Replace runs only after that report says coverage
+ * is complete and the owner confirms.
  */
 
-interface RebuildResponse {
+interface ScoreRow {
+  sourceId: string;
+  handle: string;
+  storedScore: number;
+  recomputedScore: number | null;
+  agree: boolean;
+}
+
+interface VerifyResponse {
+  mode?: "verify" | "rebuild";
   truncated?: boolean;
   warning?: string | null;
   limitation?: string;
   notes?: string[];
-  duplicatesDropped?: number;
-  skipped?: Array<{ blobId: string; reason: string }>;
-  counts?: {
-    sources: number;
-    claims: number;
-    resolutions: number;
-    scoreVersions: number;
-    memoryLog: number;
-  };
+  matched?: number;
+  mismatched?: number;
+  missingFromRecall?: number;
+  recalledNotInPostgres?: number;
+  scores?: ScoreRow[];
+  coverageComplete?: boolean;
+  excludedNamespaces?: string[];
+  mismatches?: Array<{ kind: string; id: string; detail: string }>;
+  missing?: Array<{ kind: string; id: string }>;
   coverage?: {
     rawHits: number;
     unique: number;
@@ -36,9 +44,10 @@ interface RebuildResponse {
 
 export default function RebuildButton() {
   const [phase, setPhase] = useState<"idle" | "working" | "done" | "error">("idle");
+  const [action, setAction] = useState<"verify" | "rebuild">("verify");
   const [elapsed, setElapsed] = useState(0);
   const [jobStatus, setJobStatus] = useState<string | null>(null);
-  const [result, setResult] = useState<RebuildResponse | null>(null);
+  const [result, setResult] = useState<VerifyResponse | null>(null);
   const cancel = useRef(false);
 
   useEffect(() => {
@@ -57,19 +66,26 @@ export default function RebuildButton() {
     return () => clearInterval(timer);
   }, [phase]);
 
-  async function rebuild() {
+  async function run(mode: "verify" | "rebuild") {
+    if (mode === "rebuild") {
+      const ok = window.confirm(
+        "Replace the Postgres projection with what recall returned? This drops the current tables. Do it only after the coverage report is complete.",
+      );
+      if (!ok) return;
+    }
+    setAction(mode);
     setPhase("working");
     setElapsed(0);
     setJobStatus(null);
     setResult(null);
     try {
       const token = askAdminToken();
-      const res = await apiPost("/rebuild", {}, token);
+      const res = await apiPost("/rebuild", mode === "rebuild" ? { mode: "rebuild", confirm: true } : { mode: "verify" }, token);
       if (res.status === 401) clearAdminToken();
       if (res.status === 401 || res.status >= 400 || !res.body?.jobId) {
         setPhase("error");
         setResult({
-          error: "rebuild failed",
+          error: "request failed",
           detail:
             res.status === 401
               ? "Admin token was rejected. Click again and enter the Coolify ADMIN_TOKEN."
@@ -81,30 +97,44 @@ export default function RebuildButton() {
       if (cancel.current) return;
       if (job.status === "failed") {
         setPhase("error");
-        setResult({ error: "rebuild failed", detail: job.error || "rebuild failed" });
+        setResult({ error: "request failed", detail: job.error || "the worker failed" });
         return;
       }
-      setResult(job.result as RebuildResponse);
+      setResult(job.result as VerifyResponse);
       setPhase("done");
     } catch (err) {
       if (cancel.current) return;
       setPhase("error");
-      setResult({ error: "rebuild failed", detail: err instanceof Error ? err.message : String(err) });
+      setResult({ error: "request failed", detail: err instanceof Error ? err.message : String(err) });
     }
   }
 
-  const counts = result?.counts;
+  const canReplace = phase === "done" && result?.mode === "verify" && result.coverageComplete === true;
 
   return (
     <div className="mt-4">
-      <button
-        type="button"
-        onClick={rebuild}
-        disabled={phase === "working"}
-        className="border border-[var(--line)] rounded px-4 py-2 text-sm hover:border-[var(--dim)] disabled:opacity-50"
-      >
-        {phase === "working" ? "Rebuilding…" : "Rebuild projection from Walrus"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => run("verify")}
+          disabled={phase === "working"}
+          className="border border-[var(--line)] rounded px-4 py-2 text-sm hover:border-[var(--dim)] disabled:opacity-50"
+        >
+          {phase === "working" && action === "verify" ? "Verifying…" : "Verify against Walrus"}
+        </button>
+        <button
+          type="button"
+          onClick={() => run("rebuild")}
+          disabled={phase === "working" || !canReplace}
+          className="border border-[var(--line)] rounded px-4 py-2 text-sm text-[var(--dim)] hover:border-[var(--dim)] disabled:opacity-40"
+        >
+          {phase === "working" && action === "rebuild" ? "Replacing…" : "Replace projection"}
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">
+        Verify is the demo. It does not drop tables. Replace stays off until a verify report
+        says every product namespace came back in full.
+      </p>
 
       {phase === "working" && (
         <div className="mt-4" aria-busy="true">
@@ -112,7 +142,7 @@ export default function RebuildButton() {
             <span />
           </div>
           <p className="mt-3 text-sm text-[var(--dim)]">
-            {jobStatus === "pending" ? "Queued for the worker." : "Recalling memories and rebuilding the projection."}{" "}
+            {jobStatus === "pending" ? "Queued for the worker." : "Reading Walrus and comparing it with Postgres."}{" "}
             Elapsed {elapsed}s.
           </p>
         </div>
@@ -122,36 +152,75 @@ export default function RebuildButton() {
         <p className="mt-4 text-sm text-[var(--bad)]">{result.detail}</p>
       )}
 
-      {phase === "done" && result && (
-        <div className="mt-4 text-sm">
-          <p className={result.truncated ? "text-[var(--good)]" : "text-[var(--bad)]"}>
-            {result.truncated
-              ? "Projection replaced with what recall returned."
-              : "Projection was not modified."}
-          </p>
-          {result.warning && <p className="mt-2 text-[var(--dim)]">{result.warning}</p>}
-          {counts && (
-            <dl className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <Count label="sources" value={counts.sources} />
-              <Count label="claims" value={counts.claims} />
-              <Count label="resolutions" value={counts.resolutions} />
-              <Count label="score versions" value={counts.scoreVersions} />
-              <Count label="memory log" value={counts.memoryLog} />
-            </dl>
-          )}
-          <p className="mt-3 text-xs text-[var(--void)]">
-            {result.coverage ? `${result.coverage.unique} unique memories from ${result.coverage.rawHits} hits` : ""}
-            {result.duplicatesDropped ? ` · ${result.duplicatesDropped} duplicates dropped` : ""}
-            {result.skipped?.length ? ` · ${result.skipped.length} skipped` : ""}
-          </p>
-          {result.notes && result.notes.length > 0 && (
-            <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
-              {result.notes.map((n) => (
-                <li key={n}>{n}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {phase === "done" && result && <Report result={result} />}
+    </div>
+  );
+}
+
+function Report({ result }: { result: VerifyResponse }) {
+  const headline =
+    result.mode === "rebuild" && result.truncated
+      ? "Projection replaced with what recall returned."
+      : result.mode === "rebuild"
+        ? "Projection was not replaced."
+        : "Verification finished. Postgres was not modified.";
+
+  return (
+    <div className="mt-4 text-sm">
+      <p className={result.truncated ? "text-[var(--good)]" : "text-[var(--fg)]"}>{headline}</p>
+      {result.warning && <p className="mt-2 text-[var(--dim)]">{result.warning}</p>}
+      <dl className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Count label="matched" value={result.matched ?? 0} />
+        <Count label="mismatched" value={result.mismatched ?? 0} />
+        <Count label="missing from recall" value={result.missingFromRecall ?? 0} />
+        <Count label="only in recall" value={result.recalledNotInPostgres ?? 0} />
+      </dl>
+      <p className="mt-3 text-xs text-[var(--void)] max-w-2xl">
+        Missing from recall means those Postgres rows were not in the memories recall returned.
+        Recall is not a full listing, so those rows can still be on Walrus.
+        {result.coverage ? ` ${result.coverage.unique} unique memories from ${result.coverage.rawHits} hits.` : ""}
+        {result.coverageComplete ? " Product-namespace coverage is complete." : " Product-namespace coverage is not complete."}
+        {result.excludedNamespaces && result.excludedNamespaces.length > 0
+          ? ` Excluded namespaces: ${result.excludedNamespaces.join(", ")}.`
+          : ""}
+      </p>
+      {result.coverage?.gaps && result.coverage.gaps.length > 0 && (
+        <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
+          {result.coverage.gaps.map((g) => (
+            <li key={g.namespace}>
+              {g.namespace}: recalled {g.recalled} of {g.reported}
+            </li>
+          ))}
+        </ul>
+      )}
+      {result.scores && result.scores.length > 0 && (
+        <table className="mt-4 w-full text-xs">
+          <thead className="text-[var(--void)]">
+            <tr>
+              <th className="text-left font-normal py-1">source</th>
+              <th className="text-right font-normal">stored</th>
+              <th className="text-right font-normal">recomputed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {result.scores.map((s) => (
+              <tr key={s.sourceId} className="border-t border-[var(--line)]">
+                <td className="py-1">{s.handle}</td>
+                <td className="text-right mono">{s.storedScore.toFixed(2)}</td>
+                <td className={`text-right mono ${s.agree ? "" : "text-[var(--bad)]"}`}>
+                  {s.recomputedScore === null ? "not in recall" : s.recomputedScore.toFixed(2)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {result.notes && result.notes.length > 0 && (
+        <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
+          {result.notes.map((n) => (
+            <li key={n}>{n}</li>
+          ))}
+        </ul>
       )}
     </div>
   );

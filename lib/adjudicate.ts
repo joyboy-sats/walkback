@@ -20,6 +20,7 @@ import {
   netChangeInWindow,
   TatumError,
 } from "./tatum";
+import { isPlaceholderAddress } from "./scoring-exclusion";
 import type {
   BalanceChangeParams,
   BalanceSnapshot,
@@ -89,6 +90,14 @@ export async function adjudicate(
       reason: `Deadline (${input.deadline}) has not passed; nothing to check yet.`,
       evidence: { deadlinePassed: false, asOf: now.toISOString() },
     };
+  }
+
+  const address = addressOf(input.params);
+  if (address && isPlaceholderAddress(address)) {
+    return voidVerdict(
+      `Address ${short(address)} is a placeholder, so the claim was not checked and does not affect the trust score.`,
+      { placeholder: true, address },
+    );
   }
 
   try {
@@ -237,4 +246,9 @@ function ticker(coinType: string): string {
   if (coinType === SUI_COIN_TYPE) return "SUI";
   const parts = coinType.split("::");
   return parts[parts.length - 1] || coinType.slice(0, 8);
+}
+
+function addressOf(params: ClaimParams): string | null {
+  if ("address" in params && typeof params.address === "string") return params.address;
+  return null;
 }

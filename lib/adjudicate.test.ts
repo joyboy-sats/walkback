@@ -150,6 +150,26 @@ describe("adjudicate voids", () => {
     expectVoidLeavesScore(verdict);
     expect(verdict.reason.toLowerCase()).toMatch(/unknown|no verdict/);
   });
+
+  it("voids a placeholder address instead of trusting a zero balance", async () => {
+    const placeholder = `0x${"1".repeat(64)}`;
+    vi.mocked(getBalance).mockResolvedValue({ balance: "0", coinType: ASSET });
+
+    const verdict = await adjudicate(
+      input({
+        claimType: "balance_threshold",
+        params: { address: placeholder, asset: ASSET, direction: "gte", amount: "1" },
+        snapshot: null,
+        deadline: PAST,
+      }),
+      NOW,
+    );
+
+    expectVoidLeavesScore(verdict);
+    expect(verdict.reason.toLowerCase()).toContain("placeholder");
+    expect(verdict.outcome).not.toBe("false");
+    expect(getBalance).not.toHaveBeenCalled();
+  });
 });
 
 function input(partial: AdjudicationInput): AdjudicationInput {

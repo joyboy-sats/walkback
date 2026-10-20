@@ -12,11 +12,20 @@
  */
 import "dotenv/config";
 import { config } from "dotenv";
+import { readFile } from "node:fs/promises";
 config({ path: ".env.local" });
 
-import { readFile } from "node:fs/promises";
-import { requireDelegateKey } from "../lib/env";
-import { finishSeed, runSeed } from "../lib/seed-run";
+if (!process.env.DATABASE_URL?.trim()) {
+  console.error(
+    "DATABASE_URL is not set.\n" +
+      "Seed runs on the Coolify worker host, next to Postgres. Add DATABASE_URL to .env.local there.\n" +
+      "Do not copy .env.example onto Vercel. Vercel never receives DATABASE_URL.",
+  );
+  process.exit(1);
+}
+
+const { requireDelegateKey } = await import("../lib/env");
+const { finishSeed, runSeed } = await import("../lib/seed-run");
 
 requireDelegateKey();
 
