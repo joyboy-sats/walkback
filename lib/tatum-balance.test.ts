@@ -1,0 +1,66 @@
+/**
+ * The balance wire shape.
+ *
+ * `suix_getBalance` returns FLAT fields — `totalBalance`, `coinType`,
+ * `coinObjectCount` — not a nested `balance` object. An earlier version of
+ * `getBalance` read `result.balance.balance`, which is `undefined` on every
+ * real response, so every address parsed as holding zero and every balance
+ * claim adjudicated `false`.
+ *
+ * The fixture below is the live response captured from
+ * `https://sui-mainnet.gateway.tatum.io`, trimmed to the fields we read.
+ */
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("server-only", () => ({}));
+
+import { TatumError, parseBalanceResponse, type RawBalance } from "./tatum";
+
+/** Captured from the live gateway for a non-zero address. */
+const LIVE_RESPONSE: RawBalance & Record<string, unknown> = {
+  coinType: "0x2::sui::SUI",
+  coinObjectCount: 8781,
+  totalBalance: "2400568446767",
+  lockedBalance: {},
+  fundsInAddressBalance: "0",
+};
+
+describe("parseBalanceResponse", () => {
+  it("reads totalBalance from the flat shape", () => {
+    const parsed = parseBalanceResponse(LIVE_RESPONSE, "0x2::sui::SUI");
+    expect(parsed.balance).toBe("2400568446767");
+    expect(parsed.coinType).toBe("0x2::sui::SUI");
+    expect(parsed.coinObjectCount).toBe(8781);
+  });
+
+  it("does not return zero for a funded address", () => {
+    // The exact regression: a nested-shape reader returns "0" here.
+    const parsed = parseBalanceResponse(LIVE_RESPONSE, "0x2::sui::SUI");
+    expect(parsed.balance).not.toBe("0");
+    expect(BigInt(parsed.balance)).toBeGreaterThan(0n);
+  });
+
+  it("keeps a genuine zero balance as zero, not an error", () => {
+    const parsed = parseBalanceResponse(
+      { coinType: "0x2::sui::SUI", coinObjectCount: 0, totalBalance: "0" },
+      "0x2::sui::SUI",
+    );
+    expect(parsed.balance).toBe("0");
+  });
+
+  it("falls back to the requested coin type when the node omits it", () => {
+    const parsed = parseBalanceResponse({ totalBalance: "5" }, "0xabc::tok::TOK");
+    expect(parsed.coinType).toBe("0xabc::tok::TOK");
+  });
+
+  it("throws rather than guessing zero when the shape is unknown", () => {
+    // A nested `{ balance: { balance } }` response — what the old code assumed.
+    const nested = { balance: { balance: "123" } } as unknown as RawBalance;
+    expect(() => parseBalanceResponse(nested, "0x2::sui::SUI")).toThrow(TatumError);
+  });
+
+  it("throws on an empty result", () => {
+    expect(() => parseBalanceResponse(null, "0x2::sui::SUI")).toThrow(TatumError);
+    expect(() => parseBalanceResponse(undefined, "0x2::sui::SUI")).toThrow(TatumError);
+  });
+});

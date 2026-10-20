@@ -133,23 +133,55 @@ export interface BalanceInfo {
   coinObjectCount?: number;
 }
 
+/**
+ * Wire shape of `suix_getBalance`. The fields are FLAT on the result object:
+ *
+ *   { coinType, coinObjectCount, totalBalance, lockedBalance, fundsInAddressBalance }
+ *
+ * Not `{ balance: { balance } }`. Reading the nested shape silently yields 0
+ * for every address, which makes every balance claim adjudicate `false`.
+ * Verified against the live Tatum gateway.
+ */
+export interface RawBalance {
+  coinType?: string;
+  coinObjectCount?: number;
+  totalBalance?: string;
+}
+
+/**
+ * Parse a `suix_getBalance` result. Pure, so the wire shape can be asserted
+ * without a network call.
+ *
+ * A zero balance still returns an object with `totalBalance: "0"`; only a
+ * missing field means the node answered in a shape we do not understand.
+ * That case throws rather than returning zero: guessing zero would turn an
+ * upstream problem into a false accusation against the source.
+ */
+export function parseBalanceResponse(
+  raw: RawBalance | null | undefined,
+  fallbackCoinType: string,
+): BalanceInfo {
+  if (!raw || raw.totalBalance === undefined) {
+    throw new TatumError(
+      `suix_getBalance returned no totalBalance (keys: ${
+        raw ? Object.keys(raw).join(",") : "null"
+      })`,
+      undefined,
+      "suix_getBalance",
+    );
+  }
+  return {
+    balance: String(raw.totalBalance),
+    coinType: raw.coinType ?? fallbackCoinType,
+    ...(raw.coinObjectCount !== undefined ? { coinObjectCount: raw.coinObjectCount } : {}),
+  };
+}
+
 /** Current balance of one coin type for one address. */
 export async function getBalance(address: string, coinType: string): Promise<BalanceInfo> {
   assertAddress(address);
-  const raw = await rpc<{
-    balance?: { coinType?: string; balance?: string; coinObjectCount?: number };
-  }>("suix_getBalance", [address, coinType]);
-
-  const b = raw.balance;
-  if (!b || b.balance === undefined) {
-    // A missing coin type is a real answer: the address holds none of it.
-    return { balance: "0", coinType };
-  }
-  return {
-    balance: String(b.balance),
-    coinType: b.coinType ?? coinType,
-    ...(b.coinObjectCount !== undefined ? { coinObjectCount: b.coinObjectCount } : {}),
-  };
+  const raw = await rpc<RawBalance>("suix_getBalance", [address, coinType]);
+  return parseBalanceResponse(raw, coinType);
 }
 
 export interface BalanceChange {
