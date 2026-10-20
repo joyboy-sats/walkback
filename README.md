@@ -186,6 +186,8 @@ docker build -f Dockerfile.worker -t walkback-worker .
 docker run --env-file worker.env walkback-worker
 ```
 
+The API image includes `curl`. Point Coolify’s healthcheck at `GET http://localhost:8080/health`. The worker has no HTTP port, so disable the healthcheck on that Coolify service.
+
 API command, also `npm run api`:
 
 `node --conditions=react-server --import tsx server/index.ts`

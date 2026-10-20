@@ -58,7 +58,10 @@ function config(): Config {
     .map((s) => s.trim())
     .filter(Boolean);
   if (origins.length === 0) {
-    throw new Error("CORS_ORIGIN is required (the Vercel origin, comma-separated if more than one)");
+    throw new Error(
+      "CORS_ORIGIN is required. Set it to the Vercel frontend origin, for example https://<project>.vercel.app. " +
+        "More than one origin is comma-separated, for example https://a.vercel.app,https://b.vercel.app.",
+    );
   }
   const port = Number(process.env.PORT ?? "8080");
   if (!Number.isInteger(port) || port < 1) throw new Error("PORT must be a positive integer");
