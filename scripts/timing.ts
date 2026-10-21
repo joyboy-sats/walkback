@@ -14,6 +14,7 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 import { MemWal } from "@mysten-incubation/memwal";
+import { finishScript } from "../lib/script-exit";
 
 const NS = "walkback.timing";
 const TAG = `timing-${Date.now()}`;
@@ -62,8 +63,8 @@ async function main() {
 }
 
 main()
+  .then(() => finishScript(0, { close: async () => { memwal.destroy(); } }))
   .catch((e) => {
     console.error(e instanceof Error ? `${e.name}: ${e.message}` : e);
-    process.exitCode = 1;
-  })
-  .finally(() => memwal.destroy());
+    return finishScript(1, { close: async () => { memwal.destroy(); } });
+  });

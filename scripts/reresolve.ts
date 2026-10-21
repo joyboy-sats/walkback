@@ -29,8 +29,11 @@ if (!process.env.DATABASE_URL?.trim()) {
 }
 
 const { requireDelegateKey } = await import("../lib/env");
+const { closeDb } = await import("../lib/db");
+const { destroyMemwal } = await import("../lib/memwal");
 const { claimsForSourceUrls } = await import("../lib/reads");
 const { resolveClaimsById } = await import("../lib/resolve");
+const { finishScript } = await import("../lib/script-exit");
 
 requireDelegateKey();
 
@@ -64,34 +67,51 @@ if (urls.length === 0) {
   process.exit(1);
 }
 
-const rows = await claimsForSourceUrls(urls);
-const found = new Set(rows.map((row) => row.sourceUrl));
-const missing = urls.filter((url) => !found.has(url));
-if (missing.length > 0) {
-  console.error("no claim for:");
-  for (const url of missing) console.error(`  ${url}`);
-  process.exit(1);
+let code = 0;
+try {
+  const rows = await claimsForSourceUrls(urls);
+  const found = new Set(rows.map((row) => row.sourceUrl));
+  const missing = urls.filter((url) => !found.has(url));
+  if (missing.length > 0) {
+    console.error("no claim for:");
+    for (const url of missing) console.error(`  ${url}`);
+    code = 1;
+  } else {
+    console.log(`re-resolving ${rows.length} claim(s); force=${force}`);
+    for (const row of rows) console.log(`  ${row.status}  ${row.id}  ${row.sourceUrl}`);
+
+    const { reports, errors } = await resolveClaimsById(
+      rows.map((row) => row.id),
+      new Date(),
+      undefined,
+      { supersede: true, force },
+    );
+
+    for (const report of reports) {
+      console.log(
+        `${report.claimId}  ${report.outcome}  score ${report.scoreBefore.toFixed(4)} -> ${report.scoreAfter.toFixed(4)}` +
+          (report.skipped ? `  skipped: ${report.skipped}` : ""),
+      );
+      console.log(`  ${report.reason}`);
+      if (report.blobs.resolution) console.log(`  resolution ${report.blobs.resolution}`);
+      if (report.blobs.score) console.log(`  score ${report.blobs.score}`);
+    }
+    for (const error of errors) console.error(`FAILED ${error.claimId}  ${error.error}`);
+    if (errors.length > 0) code = 1;
+  }
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  code = 1;
 }
 
-console.log(`re-resolving ${rows.length} claim(s); force=${force}`);
-for (const row of rows) console.log(`  ${row.status}  ${row.id}  ${row.sourceUrl}`);
-
-const { reports, errors } = await resolveClaimsById(
-  rows.map((row) => row.id),
-  new Date(),
-  undefined,
-  { supersede: true, force },
-);
-
-for (const report of reports) {
-  console.log(
-    `${report.claimId}  ${report.outcome}  score ${report.scoreBefore.toFixed(4)} -> ${report.scoreAfter.toFixed(4)}` +
-      (report.skipped ? `  skipped: ${report.skipped}` : ""),
-  );
-  console.log(`  ${report.reason}`);
-  if (report.blobs.resolution) console.log(`  resolution ${report.blobs.resolution}`);
-  if (report.blobs.score) console.log(`  score ${report.blobs.score}`);
-}
-for (const error of errors) console.error(`FAILED ${error.claimId}  ${error.error}`);
-
-if (errors.length > 0) process.exit(1);
+// The projection pool stays referenced after the last query (idle_timeout is
+// off). Close it, drop the MemWal client, then exit even if a socket remains.
+await finishScript(code, {
+  close: async () => {
+    try {
+      await closeDb();
+    } finally {
+      destroyMemwal();
+    }
+  },
+});

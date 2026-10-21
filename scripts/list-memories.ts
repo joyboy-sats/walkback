@@ -15,11 +15,13 @@
  */
 import "dotenv/config";
 import { config } from "dotenv";
+import { finishScript } from "../lib/script-exit";
 
 config({ path: ".env.local" });
 
 const { destroyMemwal, listAllMemories } = await import("../lib/memwal");
 
+let code = 0;
 try {
   const walk = await listAllMemories();
   const deletedIds = new Set(walk.deleted.map((row) => row.memoryId));
@@ -39,7 +41,9 @@ try {
   }
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
+  code = 1;
 } finally {
   destroyMemwal();
 }
+
+await finishScript(code);
