@@ -15,6 +15,10 @@ import { ApiError, apiGet } from "@/lib/public-api";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
 import VerdictBadge from "@/components/verdict-badge";
 import { TrustMeter, TrustReadout } from "@/components/trust-meter";
+import { InspectIllustration } from "@/components/illustrations";
+import { HaloBadge } from "@/components/ui/halo-badge";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft } from "lucide-react";
 
 interface SourceDetail {
   source: {
@@ -85,23 +89,41 @@ export default async function SourcePage({
 
   return (
     <div>
-      <a
-        href="/"
-        className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition-colors hover:text-ink"
-      >
-        <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden="true">
-          <path d="M9.5 6h-7M5.5 3l-3 3 3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        Feed
-      </a>
+      <Button asChild variant="ghost" size="sm" className="-ml-2 h-7 gap-1.5 px-2 text-[12px] text-ink-3">
+        <a href="/">
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Feed
+        </a>
+      </Button>
 
       {/* ── Headline ───────────────────────────────────────────────────── */}
-      <header className="mt-5">
-        <p className="label mb-2">Source</p>
+      <header className="relative mt-4 overflow-hidden rounded-2xl border border-line bg-surface-1">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.035]"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px)",
+            backgroundSize: "28px 28px",
+          }}
+        />
+        <div className="relative grid items-start gap-6 px-6 py-7 lg:grid-cols-[1fr_190px]">
+        <div>
+        <div className="mb-3 flex flex-wrap items-center gap-2.5">
+          <HaloBadge
+            variant={band === "muted" ? "destructive" : band === "trusted" ? "default" : "secondary"}
+            tabularNums
+          >
+            {band}
+          </HaloBadge>
+          <span className="label">Source · evidence chain</span>
+        </div>
         <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
-          <h1 className="text-[30px] font-semibold leading-none tracking-[-0.025em]">
-            {source.handle}
-          </h1>
+          <div className="flex items-end gap-5">
+            <h1 className="text-[30px] font-semibold leading-none tracking-[-0.025em]">
+              {source.handle}
+            </h1>
+          </div>
           <div className="flex items-end gap-8">
             <div>
               <p className="label mb-1.5">trust</p>
@@ -142,10 +164,15 @@ export default async function SourcePage({
             encodes, and why no band is assigned.
           </p>
         )}
+        </div>
+        <div className="hidden justify-self-end lg:block">
+          <InspectIllustration className="h-[128px] w-[160px]" />
+        </div>
+        </div>
       </header>
 
       {/* ── Verdict tally ──────────────────────────────────────────────── */}
-      <dl className="mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+      <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
         <Tally label="true" value={counts.true} tone="text-true" />
         <Tally label="false" value={counts.false} tone="text-false" />
         <Tally label="could not check" value={counts.void} tone="text-ink-2" />

@@ -52,6 +52,41 @@
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
+
+/*
+ * shadcn/ui token bridge.
+ *
+ * shadcn components speak in semantic names (background, primary, muted,
+ * border) rather than this project's palette names. These map the two onto each
+ * other so a stock shadcn component picks up Walkback's colours instead of
+ * Tailwind's defaults, and so there is one place to change them.
+ */
+@theme inline {
+  --color-background: var(--color-surface-0);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-surface-1);
+  --color-card-foreground: var(--color-ink);
+  --color-popover: var(--color-surface-2);
+  --color-popover-foreground: var(--color-ink);
+
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--color-surface-2);
+  --color-secondary-foreground: var(--color-ink);
+  --color-muted: var(--color-surface-2);
+  --color-muted-foreground: var(--color-ink-3);
+
+  --color-accent-foreground: var(--color-ink);
+  --color-destructive: var(--color-false);
+  --color-destructive-foreground: #ffffff;
+
+  --color-border: var(--color-line);
+  --color-input: var(--color-line);
+  --color-ring: var(--color-accent);
+
+  --radius: 0.625rem;
+}
+
 :root {
   color-scheme: dark;
 }

@@ -10,6 +10,8 @@
  */
 import { apiGet } from "@/lib/public-api";
 import RebuildButton from "./rebuild-button";
+import { ArchiveIllustration, LedgerIllustration } from "@/components/illustrations";
+import { HaloBadge } from "@/components/ui/halo-badge";
 
 interface MemoryView {
   rows: Array<{
@@ -51,20 +53,41 @@ export default async function MemoryPage() {
   return (
     <div>
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <section className="mb-8">
-        <p className="label mb-2">Walrus Memory · mainnet</p>
-        <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em]">
-          The ledger behind the ledger.
-        </h1>
-        <p className="mt-3 max-w-[62ch] text-[14px] leading-relaxed text-ink-2">
-          Every claim, verdict and score version is written to Walrus Memory on
-          mainnet. Walrus is the system of record; the Postgres tables the rest of
-          the app reads are a rebuildable projection of it.
-        </p>
+      <section className="relative mb-6 overflow-hidden rounded-2xl border border-line bg-surface-1">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.035]"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px)",
+            backgroundSize: "28px 28px",
+          }}
+        />
+        <div className="relative grid items-center gap-6 px-6 py-7 sm:grid-cols-[1fr_200px] sm:px-8">
+          <div>
+            <div className="mb-3 flex flex-wrap items-center gap-2.5">
+              <HaloBadge variant="secondary" tabularNums live>
+                {rows.length} memories
+              </HaloBadge>
+              <span className="label">Walrus Memory · mainnet</span>
+            </div>
+            <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.025em]">
+              The ledger behind the ledger.
+            </h1>
+            <p className="mt-3 max-w-[58ch] text-[14px] leading-relaxed text-ink-2">
+              Every claim, verdict and score version is written to Walrus Memory on
+              mainnet. Walrus is the system of record; the Postgres tables the rest
+              of the app reads are a rebuildable projection of it.
+            </p>
+          </div>
+          <div className="hidden justify-self-end sm:block">
+            <ArchiveIllustration className="h-[130px] w-[165px]" />
+          </div>
+        </div>
       </section>
 
       {/* ── KPI ────────────────────────────────────────────────────────── */}
-      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
         <Kpi label="memories" value={String(rows.length)} />
         <Kpi label="namespaces" value={String(Object.keys(byNamespace).length)} />
         <Kpi label="kinds" value={String(Object.keys(byKind).length)} />
@@ -107,7 +130,10 @@ export default async function MemoryPage() {
       {/* ── Verify / rebuild ───────────────────────────────────────────── */}
       <section className="mt-8 overflow-hidden rounded-lg border border-line">
         <div className="border-b border-line bg-surface-1 px-4 py-3">
-          <h2 className="text-[14px] font-medium">Verify against Walrus</h2>
+          <div className="flex items-center gap-2">
+            <LedgerIllustration className="h-4 w-5 text-ink-3" muted />
+            <h2 className="text-[14px] font-medium">Verify against Walrus</h2>
+          </div>
           <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
             Pages the relayer inventory and compares it with Postgres, record by
             record. Replacing the projection stays unavailable until every live
@@ -139,7 +165,7 @@ export default async function MemoryPage() {
             No memories in the projection yet. Ingest a post to write the first one.
           </p>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-line">
+          <div className="overflow-hidden rounded-xl border border-line">
             <table className="w-full border-collapse text-left">
               <thead>
                 <tr className="border-b border-line bg-surface-1">

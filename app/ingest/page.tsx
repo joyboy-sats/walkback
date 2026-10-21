@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
 import { apiPost, pollJob } from "@/lib/public-api";
+import { ReceiptIllustration, SealIllustration } from "@/components/illustrations";
+import { HaloBadge } from "@/components/ui/halo-badge";
+import { ArrowRight } from "lucide-react";
 
 /**
  * Paste a post and see exactly what ingest kept.
@@ -131,22 +134,41 @@ export default function IngestPage() {
 
   return (
     <div>
-      <section className="mb-8">
-        <p className="label mb-2">Ingest</p>
-        <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em]">
-          Turn a post into a receipt.
-        </h1>
-        <p className="mt-3 max-w-[62ch] text-[14px] leading-relaxed text-ink-2">
-          Walkback extracts claims that can be checked against Sui, freezes a
-          balance snapshot at this moment, and writes each one to Walrus Memory.
-          Most posts contain nothing checkable — that comes back as zero claims,
-          not as an error.
-        </p>
-        <p className="mt-2 max-w-[62ch] text-[12px] leading-relaxed text-ink-3">
-          The first write in a tab asks for the admin token (ADMIN_TOKEN on the
-          Coolify backend). The browser keeps it in sessionStorage and sends it as
-          <span className="mono"> x-admin-token</span>. Vercel stores nothing.
-        </p>
+      <section className="relative mb-8 overflow-hidden rounded-2xl border border-line bg-surface-1">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.035]"
+          style={{
+            backgroundImage:
+              "linear-gradient(to right, currentColor 1px, transparent 1px), linear-gradient(to bottom, currentColor 1px, transparent 1px)",
+            backgroundSize: "28px 28px",
+          }}
+        />
+        <div className="relative grid items-center gap-6 px-6 py-7 sm:grid-cols-[1fr_200px] sm:px-8">
+          <div>
+            <div className="mb-3 flex flex-wrap items-center gap-2.5">
+              <HaloBadge variant="secondary">ingest</HaloBadge>
+              <span className="label">extract · snapshot · write</span>
+            </div>
+            <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.025em]">
+              Turn a post into a receipt.
+            </h1>
+            <p className="mt-3 max-w-[56ch] text-[14px] leading-relaxed text-ink-2">
+              Walkback extracts claims that can be checked against Sui, freezes a
+              balance snapshot at this moment, and writes each one to Walrus
+              Memory. Most posts contain nothing checkable — that comes back as
+              zero claims, not as an error.
+            </p>
+            <p className="mt-2 max-w-[56ch] text-[12px] leading-relaxed text-ink-3">
+              The first write in a tab asks for the admin token (ADMIN_TOKEN on the
+              Coolify backend). The browser keeps it in sessionStorage and sends it
+              as <span className="mono">x-admin-token</span>. Vercel stores nothing.
+            </p>
+          </div>
+          <div className="hidden justify-self-end sm:block">
+            <ReceiptIllustration className="h-[130px] w-[165px]" />
+          </div>
+        </div>
       </section>
 
       {/* ── Form ───────────────────────────────────────────────────────── */}
@@ -289,16 +311,19 @@ function Result({ result }: { result: IngestResponse }) {
 
         {empty && (
           <div className="mt-3 rounded-lg border border-line bg-surface-1 p-4">
-            <p className="text-[13px] leading-relaxed text-ink-2">
-              Nothing in this post was checkable. That is a normal result, not a
-              failure — most text contains no falsifiable claim about onchain
-              state. The source was still recorded.
-            </p>
+            <div className="flex items-start gap-4">
+              <SealIllustration className="hidden h-12 w-14 shrink-0 sm:block" muted />
+              <p className="text-[13px] leading-relaxed text-ink-2">
+                Nothing in this post was checkable. That is a normal result, not a
+                failure — most text contains no falsifiable claim about onchain
+                state. The source was still recorded.
+              </p>
+            </div>
           </div>
         )}
 
         {count > 0 && (
-          <ol className="mt-3 space-y-px overflow-hidden rounded-lg border border-line bg-line">
+          <ol className="mt-3 space-y-px overflow-hidden rounded-xl border border-line bg-line">
             {result.claims.map((c) => (
               <li key={c.id} className="bg-surface-1 px-4 py-3.5">
                 <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -330,7 +355,7 @@ function Result({ result }: { result: IngestResponse }) {
       {result.rejected.length > 0 && (
         <section>
           <h2 className="label mb-2.5">rejected</h2>
-          <ul className="space-y-px overflow-hidden rounded-lg border border-line bg-line">
+          <ul className="space-y-px overflow-hidden rounded-xl border border-line bg-line">
             {result.rejected.map((r, i) => (
               <li key={i} className="bg-surface-1 px-4 py-3">
                 <p className="text-[13px] leading-relaxed">
@@ -349,7 +374,7 @@ function Result({ result }: { result: IngestResponse }) {
       <section>
         <h2 className="label mb-2.5">receipt</h2>
         {result.snapshot ? (
-          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+          <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
             <Stat label="balance" value={result.snapshot.balance} mono />
             <Stat label="asset" value={result.snapshot.asset} mono />
             <Stat label="as of" value={result.snapshot.asOf.slice(0, 19).replace("T", " ")} mono />
@@ -382,7 +407,7 @@ function Result({ result }: { result: IngestResponse }) {
         {result.memoryBlobIds.length === 0 ? (
           <p className="text-[13px] text-ink-3">No memories were written.</p>
         ) : (
-          <ul className="space-y-px overflow-hidden rounded-lg border border-line bg-line">
+          <ul className="space-y-px overflow-hidden rounded-xl border border-line bg-line">
             {result.memoryBlobIds.map((id) => (
               <li key={id} className="mono break-all bg-surface-1 px-4 py-2.5 text-[12px] text-ink-2">
                 {id}
