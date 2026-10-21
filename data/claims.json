@@ -1,5 +1,5 @@
 {
-  "note": "Real X posts collected 2026-10-20 (SGT). Not synthetic. Text is the post text. Windows and deadlines on tx_replay were chosen when the posts were collected; the posts themselves do not state them. @mysqlsui and both balance_threshold claims (deadline 2026-10-22T00:00:00.000Z, 08:00 SGT) are omitted. x-onchainwatch-2110064092434104572 is omitted: the quote names From 0x1ae70480 but the stored address is different, and that was its only claim. Ids are lowercase slugs of the candidate ids, with underscores removed, so they match the seed validator.",
+  "note": "Real X posts collected 2026-10-20 (SGT). Not synthetic. Text is the post text. Windows and deadlines on tx_replay were chosen when the posts were collected; the posts themselves do not state them. @mysqlsui and both balance_threshold claims (deadline 2026-10-22T00:00:00.000Z, 08:00 SGT) are omitted. x-onchainwatch-2110064092434104572 is omitted: the quote names From 0x1ae70480 but the stored address is different, and that was its only claim. Ids are lowercase slugs of the candidate ids, with underscores removed, so they match the seed validator. Price claims record evaluation (touch or at_deadline) and, for a touch, since equal to published_at. deadline_basis says why deadline is that timestamp. The resolver does not invent either.",
   "posts": [
     {
       "id": "x-onchainwatch-2112521583134667061",
@@ -302,9 +302,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "2"
+            "amount": "2",
+            "evaluation": "touch",
+            "since": "2026-10-19T06:15:00.000Z"
           },
           "deadline": "2026-11-08T00:00:00.000Z",
+          "deadline_basis": "seed author; post says the next few weeks",
           "confidence": 0.6
         }
       ]
@@ -324,9 +327,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "1.28"
+            "amount": "1.28",
+            "evaluation": "touch",
+            "since": "2026-10-18T09:32:00.000Z"
           },
           "deadline": "2026-11-08T00:00:00.000Z",
+          "deadline_basis": "seed author; trade call, post states no date",
           "confidence": 0.65
         }
       ]
@@ -346,9 +352,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "1.28"
+            "amount": "1.28",
+            "evaluation": "touch",
+            "since": "2026-10-18T09:20:19.000Z"
           },
           "deadline": "2026-11-08T00:00:00.000Z",
+          "deadline_basis": "seed author; trade call, post states no date",
           "confidence": 0.65
         }
       ]
@@ -368,9 +377,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "1.28"
+            "amount": "1.28",
+            "evaluation": "touch",
+            "since": "2026-10-17T10:59:35.000Z"
           },
           "deadline": "2026-11-08T00:00:00.000Z",
+          "deadline_basis": "seed author; technical analysis, post states no date",
           "confidence": 0.6
         }
       ]
@@ -390,9 +402,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "1.1"
+            "amount": "1.1",
+            "evaluation": "touch",
+            "since": "2026-10-16T08:11:38.000Z"
           },
           "deadline": "2026-10-30T00:00:00.000Z",
+          "deadline_basis": "seed author; trade call, post states no date",
           "confidence": 0.65
         }
       ]
@@ -412,9 +427,12 @@
             "symbol": "SUI",
             "quote": "USD",
             "direction": "lte",
-            "amount": "0.88"
+            "amount": "0.88",
+            "evaluation": "touch",
+            "since": "2026-10-20T05:30:00.000Z"
           },
           "deadline": "2026-11-08T00:00:00.000Z",
+          "deadline_basis": "seed author; technical analysis, post states no date",
           "confidence": 0.6
         }
       ]

@@ -1,0 +1,14 @@
+{
+  "symbol": "BTC",
+  "openTime": 1771113600000,
+  "open": "69822.94000000",
+  "high": "69830.69000000",
+  "low": "69793.24000000",
+  "close": "69830.68000000",
+  "volume": "6.00278000",
+  "closeTime": 1771113659999,
+  "quoteAssetVolume": "419102.60165970",
+  "numberOfTrades": 2123,
+  "takerBuyBaseAssetVolume": "3.53113000",
+  "takerBuyQuoteAssetVolume": "246547.43442320"
+}

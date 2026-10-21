@@ -74,6 +74,7 @@ describe("extractClaims", () => {
     const args = generateObject.mock.calls[0]?.[0] as {
       model: string;
       temperature: number;
+      system: string;
       providerOptions: { gateway: { sort: string }; deepseek: { thinking: { type: string } } };
       experimental_repairText: (options: { text: string }) => Promise<string | null>;
     };
@@ -95,9 +96,55 @@ describe("extractClaims", () => {
           amount: "50000000000000",
         },
         deadline: "2026-10-31T23:59:00.000Z",
+        deadlineBasis: "stated in post",
         confidence: 0.9,
       },
     ]);
+    expect(args.system).toContain("touch");
+    expect(args.system).toContain("at_deadline");
+    expect(args.system).toContain("stated in post");
+    expect(args.system).not.toContain("7-day");
+    expect(args.system).not.toContain("14-day");
+  });
+
+  it("records a touch from the publish time and defaults a missing mode to the deadline", async () => {
+    generateObject.mockResolvedValue({
+      object: {
+        claims: [
+          draft({
+            quote: "SUI hits $3 by Friday",
+            claim_type: "price_threshold",
+            params: { symbol: "sui", quote: "usd", direction: "gte", amount: "3", evaluation: "touch", since: "1999-01-01T00:00:00.000Z" },
+            deadline_basis: "stated in post",
+          }),
+          draft({
+            quote: "ETH will be above $2 on Friday",
+            claim_type: "price_threshold",
+            params: { symbol: "eth", direction: "gte", amount: "2" },
+          }),
+        ],
+      },
+    });
+
+    const claims = await extractClaims(input);
+    expect(claims.map((claim) => claim.params)).toEqual([
+      {
+        symbol: "SUI",
+        quote: "USD",
+        direction: "gte",
+        amount: "3",
+        evaluation: "touch",
+        since: input.publishedAt,
+      },
+      {
+        symbol: "ETH",
+        quote: "USD",
+        direction: "gte",
+        amount: "2",
+        evaluation: "at_deadline",
+      },
+    ]);
+    expect(claims.every((claim) => claim.deadlineBasis === "stated in post")).toBe(true);
   });
 
   it("returns [] when the model text cannot be validated", async () => {

@@ -34,14 +34,14 @@ export async function writeDurable<T>(
   items: readonly T[],
   writeOne: (item: T) => Promise<DurableStepResult>,
   onPersisted: (item: T, result: DurableStepResult) => Promise<void>,
-): Promise<{ persisted: Array<{ item: T; result: DurableStepResult }>; error?: string }> {
+): Promise<{ persisted: Array<{ item: T; result: DurableStepResult }>; error?: string; cause?: unknown }> {
   const persisted: Array<{ item: T; result: DurableStepResult }> = [];
   for (const item of items) {
     let result: DurableStepResult;
     try {
       result = await writeOne(item);
     } catch (err) {
-      return { persisted, error: message(err) };
+      return { persisted, error: message(err), cause: err };
     }
     if (!result.blobId) {
       return { persisted, error: "write returned no blob id" };
@@ -52,6 +52,7 @@ export async function writeDurable<T>(
       return {
         persisted,
         error: `blob ${result.blobId} was written but not recorded: ${message(err)}`,
+        cause: err,
       };
     }
     persisted.push({ item, result });

@@ -199,6 +199,7 @@ export interface RebuiltClaim {
   synthetic: boolean;
   externalId: string | null;
   sourceUrl: string | null;
+  deadlineBasis: string | null;
   walrusBlobId: string;
   createdAt: string;
 }
@@ -210,6 +211,8 @@ export interface RebuiltResolution {
   evidence: Record<string, unknown>;
   walrusBlobId: string;
   resolvedAt: string;
+  /** 1 when the memory predates revisions. The highest revision is the verdict. */
+  revision: number;
 }
 
 export interface RebuiltScoreVersion {
@@ -1326,6 +1329,7 @@ async function applyProjection(p: Projection): Promise<void> {
           synthetic: c.synthetic,
           externalId: c.externalId,
           sourceUrl: c.sourceUrl,
+          deadlineBasis: c.deadlineBasis,
           createdAt: new Date(c.createdAt),
           walrusBlobId: c.walrusBlobId,
         })),
@@ -1501,6 +1505,10 @@ function addClaim(
     synthetic: payload.synthetic === true,
     externalId: typeof payload.external_id === "string" ? payload.external_id : null,
     sourceUrl: typeof payload.source_url === "string" ? payload.source_url : null,
+    deadlineBasis:
+      typeof payload.deadline_basis === "string" && payload.deadline_basis.trim()
+        ? payload.deadline_basis.trim().slice(0, 160)
+        : null,
     walrusBlobId: mem.blobId,
     createdAt: mem.createdAt ?? new Date(0).toISOString(),
   });
@@ -1519,18 +1527,48 @@ function addResolution(
     skipped.push({ blobId: mem.blobId, reason: "resolution memory is missing claim, outcome, or reason" });
     return;
   }
-  if (resolutions.has(claimId)) {
-    skipped.push({ blobId: mem.blobId, reason: `duplicate resolution for ${claimId}` });
-    return;
-  }
-  resolutions.set(claimId, {
+  const revision = resolutionRevision(payload);
+  const resolvedAt = resolutionTime(payload, mem.createdAt);
+  const incoming: RebuiltResolution = {
     claimId,
     outcome,
     reason,
     evidence: asRecord(payload.evidence) ?? {},
     walrusBlobId: mem.blobId,
-    resolvedAt: mem.createdAt ?? new Date(0).toISOString(),
-  });
+    resolvedAt,
+    revision,
+  };
+  const existing = resolutions.get(claimId);
+  if (existing && !resolutionBeats(incoming, existing)) {
+    skipped.push({ blobId: mem.blobId, reason: `older resolution for ${claimId}` });
+    return;
+  }
+  if (existing) {
+    skipped.push({ blobId: existing.walrusBlobId, reason: `superseded resolution for ${claimId}` });
+  }
+  resolutions.set(claimId, incoming);
+}
+
+/** Missing revision is the original resolution. Later revisions replace it. */
+function resolutionRevision(payload: Record<string, unknown>): number {
+  const revision = payload.revision;
+  return typeof revision === "number" && Number.isInteger(revision) && revision > 0 ? revision : 1;
+}
+
+function resolutionTime(payload: Record<string, unknown>, createdAt?: string): string {
+  const raw = payload.resolved_at;
+  if (typeof raw === "string" && !Number.isNaN(Date.parse(raw))) return new Date(raw).toISOString();
+  return createdAt ?? new Date(0).toISOString();
+}
+
+/**
+ * The latest resolution is the one the score replay uses. Revision wins,
+ * then time, then blob id so two memories cannot tie.
+ */
+function resolutionBeats(next: RebuiltResolution, prev: RebuiltResolution): boolean {
+  if (next.revision !== prev.revision) return next.revision > prev.revision;
+  if (next.resolvedAt !== prev.resolvedAt) return next.resolvedAt > prev.resolvedAt;
+  return next.walrusBlobId > prev.walrusBlobId;
 }
 
 function addScore(

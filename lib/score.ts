@@ -127,3 +127,28 @@ export function applyOutcome(
   if (outcome === "true") return computeScore(hits + 1, misses);
   return computeScore(hits, misses + 1);
 }
+
+/**
+ * Replace the outcome already folded into `hits` and `misses`.
+ *
+ * A pending claim has no previous outcome. A void never occupied a hit or a
+ * miss, so replacing it is the same as applying the new outcome. Replacing
+ * true with true leaves the counts where they were: a re-check must not
+ * count the same claim twice. The Wilson replay of the latest outcome per
+ * claim matches this arithmetic.
+ */
+export function replaceOutcome(
+  hits: number,
+  misses: number,
+  previous: "true" | "false" | "void" | null,
+  next: "true" | "false" | "void",
+): ScoreSnapshot {
+  let h = hits;
+  let m = misses;
+  if (previous === "true") h -= 1;
+  else if (previous === "false") m -= 1;
+  if (h < 0 || m < 0) {
+    throw new Error(`replaceOutcome: counts went negative (hits=${h}, misses=${m})`);
+  }
+  return applyOutcome(h, m, next);
+}

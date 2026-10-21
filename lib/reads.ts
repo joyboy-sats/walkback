@@ -1,10 +1,36 @@
 /**
  * Read models for the Coolify API. Selects only. Walrus writes happen in the worker.
  */
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "./db";
 import { LIST_ENUMERATION_NOTE } from "./projection-rebuild";
 import { sourceIsMuted } from "./score";
+import { explainVoidReason } from "./verdict-reason";
+
+export interface FeedResolution {
+  outcome: "true" | "false" | "void";
+  /** Sentence safe to show. Provider errors are rewritten once. */
+  reason: string;
+}
+
+/** Latest row wins. A re-resolve updates the row; this still prefers the newest if more than one exists. */
+export function latestResolution<T extends { claimId: string; resolvedAt: Date }>(
+  rows: readonly T[],
+): Map<string, T> {
+  const byClaim = new Map<string, T>();
+  for (const row of rows) {
+    const prev = byClaim.get(row.claimId);
+    if (!prev || row.resolvedAt.getTime() >= prev.resolvedAt.getTime()) byClaim.set(row.claimId, row);
+  }
+  return byClaim;
+}
+
+export function feedResolution(row: {
+  outcome: "true" | "false" | "void";
+  reason: string;
+}): FeedResolution {
+  return { outcome: row.outcome, reason: explainVoidReason(row.reason) };
+}
 
 export async function readFeed() {
   const db = getDb();
@@ -18,7 +44,24 @@ export async function readFeed() {
     .orderBy(desc(schema.sources.score), desc(schema.claims.deadline))
     .limit(100);
 
-  return rows.map(({ claim, source }) => ({
+  const claimIds = rows.map(({ claim }) => claim.id);
+  const resolutionRows =
+    claimIds.length === 0
+      ? []
+      : await db
+          .select({
+            claimId: schema.resolutions.claimId,
+            outcome: schema.resolutions.outcome,
+            reason: schema.resolutions.reason,
+            resolvedAt: schema.resolutions.resolvedAt,
+          })
+          .from(schema.resolutions)
+          .where(inArray(schema.resolutions.claimId, claimIds));
+  const resolutions = latestResolution(resolutionRows);
+
+  return rows.map(({ claim, source }) => {
+    const resolution = resolutions.get(claim.id);
+    return {
     claim: {
       id: claim.id,
       quote: claim.quote,
@@ -28,6 +71,7 @@ export async function readFeed() {
       synthetic: claim.synthetic,
       sourceUrl: claim.sourceUrl,
       walrusBlobId: claim.walrusBlobId,
+      resolution: resolution ? feedResolution(resolution) : null,
     },
     source: {
       id: source.id,
@@ -37,7 +81,8 @@ export async function readFeed() {
       misses: source.misses,
       muted: sourceIsMuted(source.muted, source.hits + source.misses),
     },
-  }));
+    };
+  });
 }
 
 export async function readSource(id: string) {
@@ -85,13 +130,26 @@ export async function readSource(id: string) {
       resolution: resolution
         ? {
             outcome: resolution.outcome,
-            reason: resolution.reason,
+            reason: explainVoidReason(resolution.reason),
             evidence: resolution.evidence,
             walrusBlobId: resolution.walrusBlobId,
           }
         : null,
     })),
   };
+}
+
+export async function claimsForSourceUrls(urls: readonly string[]) {
+  if (urls.length === 0) return [];
+  const db = getDb();
+  return db
+    .select({
+      id: schema.claims.id,
+      sourceUrl: schema.claims.sourceUrl,
+      status: schema.claims.status,
+    })
+    .from(schema.claims)
+    .where(inArray(schema.claims.sourceUrl, [...urls]));
 }
 
 export async function readMemory() {

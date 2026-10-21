@@ -37,6 +37,7 @@ interface FeedRow {
     synthetic: boolean;
     sourceUrl: string | null;
     walrusBlobId: string | null;
+    resolution?: { outcome: "true" | "false" | "void"; reason: string } | null;
   };
   source: {
     id: string;
@@ -186,7 +187,9 @@ export default async function FeedPage() {
                       )}
 
                       <span className="ml-auto flex items-center gap-2">
-                        {claim.status === "resolved" ? (
+                        {claim.resolution ? (
+                          <VerdictBadge outcome={claim.resolution.outcome} />
+                        ) : claim.status === "resolved" ? (
                           <VerdictBadge outcome="true" />
                         ) : claim.status === "void" ? (
                           <VerdictBadge outcome="void" />
@@ -214,6 +217,12 @@ export default async function FeedPage() {
                       {claim.quote}
                       <span className="text-ink-3">”</span>
                     </blockquote>
+
+                    {claim.resolution?.outcome === "void" && (
+                      <p className="mt-2 max-w-[68ch] text-[13px] leading-relaxed text-ink-2">
+                        {claim.resolution.reason}
+                      </p>
+                    )}
 
                     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-ink-3">
                       <span className="mono">{claim.claimType}</span>

@@ -19,6 +19,7 @@ import "server-only";
 
 import { generateObject, NoObjectGeneratedError, type LanguageModel } from "ai";
 import { z } from "zod";
+import { priceParamsFromRaw } from "./price-candle";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
 
 /**
@@ -54,6 +55,11 @@ const schema = z.object({
         deadline: z
           .string()
           .describe("Absolute ISO-8601 timestamp, UTC, resolved from relative wording."),
+        deadline_basis: z
+          .string()
+          .max(160)
+          .optional()
+          .describe('Why the deadline is that timestamp. "stated in post" when the text gives the time.'),
         confidence: z.number().min(0).max(1),
       }),
     )
@@ -80,7 +86,7 @@ claim_type must be one of:
   balance_threshold            "I hold at least 50k SUI"
   balance_change_since_ingest  "I'm adding 10k SUI this week" (change from now to deadline)
   tx_replay                    a change that already happened, or a window in the past
-  price_threshold              "SUI will be above $3 by Friday"
+  price_threshold              "SUI hits $3 by Friday" (touch) or "SUI will be above $3 on Friday" (at the deadline)
   manual                       checkable but none of the above fit
 
 Use tx_replay only when the claim refers to a period that has already started
@@ -99,11 +105,28 @@ params by type:
   balance_threshold            {address, asset, direction: "gte"|"lte", amount}
   balance_change_since_ingest  {address, asset, direction, amount}
   tx_replay                    {address, asset, since, until, direction, amount}
-  price_threshold              {symbol, quote, direction, amount}
+  price_threshold              {symbol, quote, direction, amount, evaluation}
   manual                       {note}
 amount is always a decimal string in base units (mist for SUI) for balance
 claims, and a decimal price string for price claims. asset is a coin type such
-as "0x2::sui::SUI".`;
+as "0x2::sui::SUI".
+
+price_threshold.evaluation is "touch" or "at_deadline".
+  touch         the level is hit at any time from publish until the deadline.
+                Upside or bullish wording (hits, reaches, target, take-profit)
+                is direction gte and is checked against the window high.
+                Downside or bearish wording (retest, drops to, stop) is
+                direction lte and is checked against the window low.
+                "by Friday" is touch.
+  at_deadline   the price is above or below the level at the deadline itself.
+                "on Friday" is at_deadline. direction gte means that print is
+                at least amount; direction lte means it is at most amount.
+symbol is the base asset, such as SUI, SOL, ETH, or BTC. quote is USD.
+Do not send since. Do not invent a deadline. If the text does not resolve
+to a time, drop the claim.
+
+deadline_basis is a short phrase naming why deadline is that timestamp.
+Use "stated in post" when the text gives the time.`;
 
 type ClaimDraft = z.infer<typeof schema>["claims"][number];
 
@@ -194,11 +217,13 @@ export async function extractClaims(input: ExtractionInput): Promise<ExtractedCl
     const params = normalizeParams(type, c.params, input);
     if (!params) continue;
     if (!isIso(c.deadline)) continue;
+    const deadlineBasis = (c.deadline_basis?.trim() || "stated in post").slice(0, 160);
     out.push({
       quote: c.quote.slice(0, 200),
       claimType: type,
       params,
       deadline: new Date(c.deadline).toISOString(),
+      deadlineBasis,
       confidence: c.confidence,
     });
   }
@@ -265,16 +290,21 @@ function normalizeParams(
       };
     }
     case "price_threshold": {
-      const symbol = str("symbol");
-      const amount = str("amount");
       const direction = asDirection(str("direction"));
-      if (!symbol || !amount || Number.isNaN(Number(amount)) || !direction) return null;
-      return {
-        symbol: symbol.toUpperCase(),
-        quote: (str("quote") || "USD").toUpperCase(),
-        direction,
-        amount,
-      };
+      const params = priceParamsFromRaw({
+        symbol: str("symbol"),
+        quote: str("quote"),
+        ...(direction ? { direction } : {}),
+        amount: str("amount"),
+        evaluation: str("evaluation"),
+        since: str("since"),
+        publishedAt: input.publishedAt,
+      });
+      if (!params) return null;
+      // New extractions store the mode explicitly. Rows that predate the
+      // field still omit it and are read as at_deadline.
+      if (!params.evaluation) return { ...params, evaluation: "at_deadline" };
+      return params;
     }
     case "manual":
       return { note: str("note") || "no detail provided" };

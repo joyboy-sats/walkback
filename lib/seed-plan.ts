@@ -12,6 +12,7 @@
  */
 import { z } from "zod";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
+import { priceParamsFromRaw } from "./price-candle";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
 
 /** Matches `writeMemoriesBulk`'s server cap. A seed batch must not exceed it. */
@@ -38,6 +39,11 @@ const claimSchema = z.object({
   claim_type: z.enum(claimTypes),
   params: z.record(z.string(), z.union([z.string(), z.number()])),
   deadline: z.string().datetime(),
+  /**
+   * Why `deadline` is that timestamp. Required on price claims. The resolver
+   * does not derive a deadline from this string.
+   */
+  deadline_basis: z.string().min(1).max(160).optional(),
   confidence: z.number().min(0).max(1),
 });
 
@@ -274,11 +280,17 @@ export function materializeClaims(post: SeedPost): ExtractedClaim[] | null {
         `post ${post.id} claim ${index} (${c.claim_type}) is missing a field it needs to be checkable`,
       );
     }
+    if (c.claim_type === "price_threshold" && !c.deadline_basis?.trim()) {
+      throw new Error(
+        `post ${post.id} claim ${index} is a price claim and needs deadline_basis`,
+      );
+    }
     return {
       quote: c.quote,
       claimType: c.claim_type,
       params,
       deadline: new Date(c.deadline).toISOString(),
+      ...(c.deadline_basis?.trim() ? { deadlineBasis: c.deadline_basis.trim() } : {}),
       confidence: c.confidence,
     };
   });
@@ -305,6 +317,10 @@ export interface SeedSummaryInput {
   blobIds: string[];
   scores: Array<{ handle: string; score: number; hits: number; misses: number }>;
   resolveErrors: Array<{ claimId: string; error: string }>;
+  /** Posts or phases that threw. The applied marker was not set for these posts. */
+  failures?: Array<{ step: string; error: string }>;
+  /** Posts left for a rerun because an earlier step timed out. */
+  notAttempted?: string[];
 }
 
 /** Human-readable summary. The script prints this and nothing else at the end. */
@@ -340,6 +356,16 @@ export function formatSeedSummary(s: SeedSummaryInput): string {
     lines.push("resolve errors");
     for (const e of s.resolveErrors) lines.push(`  ${e.claimId}  ${e.error}`);
   }
+  if (s.failures?.length) {
+    lines.push("failed");
+    for (const failure of s.failures) lines.push(`  ${failure.step}  ${failure.error}`);
+  }
+  if (s.notAttempted?.length) {
+    lines.push("not attempted");
+    for (const id of s.notAttempted) lines.push(`  ${id}`);
+  }
+  const incomplete = Boolean(s.failures?.length || s.notAttempted?.length || s.resolveErrors.length);
+  lines.push(`status     ${incomplete ? "incomplete" : "ok"}`);
   return lines.join("\n");
 }
 
@@ -383,15 +409,15 @@ function normalize(
       };
     }
     case "price_threshold": {
-      const symbol = str("symbol");
-      const amount = str("amount");
-      if (!symbol || !amount || Number.isNaN(Number(amount)) || !direction) return null;
-      return {
-        symbol: symbol.toUpperCase(),
-        quote: (str("quote") || "USD").toUpperCase(),
-        direction,
-        amount,
-      };
+      return priceParamsFromRaw({
+        symbol: str("symbol"),
+        quote: str("quote"),
+        ...(direction ? { direction } : {}),
+        amount: str("amount"),
+        evaluation: str("evaluation"),
+        since: str("since"),
+        publishedAt: post.published_at,
+      });
     }
     case "manual":
       return { note: str("note") || "no detail provided" };

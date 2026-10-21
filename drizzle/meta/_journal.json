@@ -22,6 +22,13 @@
       "when": 1792530000000,
       "tag": "0002_source_url",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792605993812,
+      "tag": "0003_deadline_basis",
+      "breakpoints": true
     }
   ]
 }

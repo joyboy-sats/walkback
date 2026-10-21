@@ -81,7 +81,7 @@ export function claimMemory(
   },
   extracted: ExtractedClaim,
   snapshot: BalanceSnapshot | null,
-  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string },
+  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string; deadlineBasis?: string },
 ): { text: string; key: string } {
   const snapLine = snapshot
     ? `At ingest, ${snapshot.address} held ${snapshot.balance} base units of ` +
@@ -95,6 +95,7 @@ export function claimMemory(
     ? `SYNTHETIC demo fallback — this is not a real post and must not be counted as evidence. `
     : "";
   const sourceLine = opts?.sourceUrl ? `Original post: ${opts.sourceUrl}. ` : "";
+  const basisLine = opts?.deadlineBasis ? `Deadline basis: ${opts.deadlineBasis}. ` : "";
 
   return {
     key: `claim:${claim.id}`,
@@ -103,6 +104,7 @@ export function claimMemory(
       `"${clip(extracted.quote)}"\n\n` +
       `${syntheticLine}` +
       `${sourceLine}` +
+      `${basisLine}` +
       `Recorded as a ${claim.claimType} claim with ${claim.confidence.toFixed(2)} ` +
       `extraction confidence. ${snapLine}\n\n` +
       payload({
@@ -118,6 +120,7 @@ export function claimMemory(
         synthetic: opts?.synthetic === true,
         ...(opts?.externalId ? { external_id: opts.externalId } : {}),
         ...(opts?.sourceUrl ? { source_url: opts.sourceUrl } : {}),
+        ...(opts?.deadlineBasis ? { deadline_basis: opts.deadlineBasis } : {}),
       }),
   };
 }
@@ -135,7 +138,9 @@ export function resolutionMemory(
     evidence: unknown;
   },
   score: { before: ScoreSnapshot; after: ScoreSnapshot },
+  opts?: { revision?: number; resolvedAt?: string },
 ): { text: string; key: string } {
+  const revision = opts?.revision ?? 1;
   const moved =
     score.before.score !== score.after.score
       ? `Trust moved ${score.before.score.toFixed(2)} → ${score.after.score.toFixed(2)} ` +
@@ -151,7 +156,10 @@ export function resolutionMemory(
       : `VERDICT: ${r.outcome.toUpperCase()}.`;
 
   return {
-    key: `resolution:${r.claimId}`,
+    // Revision 1 keeps the original key so a retry of the first resolution
+    // collapses onto the memory already written. A later revision is a new
+    // append; Walrus has no update, and the first key must not be reused.
+    key: revision <= 1 ? `resolution:${r.claimId}` : `resolution:${r.claimId}:r${revision}`,
     text:
       `[RESOLUTION] ${r.sourceHandle} claimed "${clip(r.quote, 120)}" ` +
       `(${r.claimType}, resolved ${new Date().toISOString().slice(0, 10)}). ` +
@@ -169,6 +177,8 @@ export function resolutionMemory(
         score_before: score.before.score,
         score_after: score.after.score,
         evidence: r.evidence,
+        ...(revision > 1 ? { revision } : {}),
+        ...(opts?.resolvedAt ? { resolved_at: opts.resolvedAt } : {}),
       }),
   };
 }

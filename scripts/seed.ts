@@ -14,10 +14,15 @@
  * its own. Every post already has `claims`, and replay posts set
  * `snapshot: null`, so the model is not called. It does call Tatum, because
  * tx_replay claims whose deadlines have passed are resolved at the end.
+ *
+ * Progress goes to stdout (`post i/N`, each write, the resolve phase). A
+ * timed-out write fails that post, leaves its marker unset, and the process
+ * exits non-zero with a summary. Run it again to resume.
  */
 import "dotenv/config";
 import { config } from "dotenv";
 import { readFile } from "node:fs/promises";
+import { finishScript } from "../lib/script-exit";
 config({ path: ".env.local" });
 
 if (!process.env.DATABASE_URL?.trim()) {
@@ -37,13 +42,24 @@ requireDelegateKey();
 
 const file = process.argv[2] ?? "data/claims.json";
 
+let code = 0;
 try {
   const raw = JSON.parse(await readFile(file, "utf8")) as unknown;
-  const summary = await runSeed(raw);
-  console.log(summary);
+  const result = await runSeed(raw);
+  console.log(result.summary);
+  if (!result.ok) code = 1;
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
-  process.exitCode = 1;
+  code = 1;
 } finally {
-  await finishSeed();
+  try {
+    await finishSeed();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    code = 1;
+  }
 }
+
+// finishSeed closes the pool and the MemWal client. A socket those calls
+// leave behind used to keep the process up; finishScript exits anyway.
+await finishScript(code);

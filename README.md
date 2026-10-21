@@ -16,9 +16,9 @@ Walkback audits public claims against onchain data. A low score means the claims
 
 ## Methodology
 
-Walkback scores only claims it can check. The closed set is `balance_threshold` (current balance via `suix_getBalance`), `balance_change_since_ingest` (the snapshot taken at ingest, compared with the balance at the deadline), `tx_replay` (`suix_queryTransactionBlocks` with `showBalanceChanges`), `price_threshold` (the Tatum rate feed), and `manual` (a human verdict, used as a demo fallback). Anything outside that set is rejected before it is stored.
+Walkback scores only claims it can check. The closed set is `balance_threshold` (current balance via `suix_getBalance`), `balance_change_since_ingest` (the snapshot taken at ingest, compared with the balance at the deadline), `tx_replay` (`suix_queryTransactionBlocks` with `showBalanceChanges`), `price_threshold` (Tatum historical USD candles over the claim's window), and `manual` (a human verdict, used as a demo fallback). Anything outside that set is rejected before it is stored.
 
-A verdict is `true` or `false` when that check decides the claim. `void` means the claim could not be verified: the deadline has not passed, there was no snapshot, the address is a placeholder, the rate feed does not cover the pair, the replay window was truncated, or the check failed. A void is not a lie. It does not count as a hit or a miss, and it does not move the score.
+A verdict is `true` or `false` when that check decides the claim. `void` means the claim could not be verified: the deadline has not passed, there was no snapshot, the address is a placeholder, the candle series does not cover the pair or the window, the replay window was truncated or a transfer could not be read, or the check failed. A void is not a lie. It does not count as a hit or a miss, and it does not move the score.
 
 The number is the lower bound of a 95% Wilson score interval over hits and misses. It is not a raw hit rate and not a model call. One correct guess is not evidence: 1 hit out of 1 claim is about 0.21, and 8 out of 10 is about 0.49.
 
@@ -83,7 +83,7 @@ types:
 | `balance_threshold` | `suix_getBalance` |
 | `balance_change_since_ingest` | snapshot vs. `suix_getBalance` at deadline |
 | `tx_replay` | `suix_queryTransactionBlocks` + `showBalanceChanges` |
-| `price_threshold` | Tatum rate API *(unverified for SUI — see note)* |
+| `price_threshold` | Tatum historical USD candles (`/v4/data/rate/symbol/OHLCV`) |
 | `manual` | human verdict, demo fallback |
 
 Trust is a **Wilson lower bound** over hits and misses, not a raw ratio and not
@@ -179,6 +179,33 @@ blob id, and the score of each source. `list:memories` prints the whole
 delegate account, not only this run. The worker image includes `scripts/`,
 `data/claims.json`, and `tsx`, which those two commands need.
 
+### Re-resolve a void
+
+A void is sticky: the first resolution is kept, and a later pass does not
+check the claim again. When a void was a failed check rather than an honest
+"could not tell", append a new resolution from the worker container. The
+previous memory stays. The new one uses `resolution:{claimId}:r2` (then
+`r3`, …). A void that becomes true or false writes the next score version.
+The Wilson replay keeps the latest outcome per claim, so the new hit is
+counted once. A claim that is already true or false is skipped unless you
+pass `--force`.
+
+```bash
+npm run reresolve -- \
+  --source-url https://x.com/_OnChainWatch/status/2112452984638444019 \
+  --source-url https://x.com/_OnChainWatch/status/2112436525434622020
+```
+
+The same body works over the API, which checks `x-admin-token` and enqueues
+the job for the worker:
+
+```bash
+curl -s -X POST "$API/resolve" \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"supersede":true,"sourceUrls":["https://x.com/_OnChainWatch/status/2112452984638444019","https://x.com/_OnChainWatch/status/2112436525434622020"]}'
+```
+
 ## Deployment
 
 Postgres runs on the Coolify internal network. Vercel cannot open it, so the
@@ -264,7 +291,9 @@ The API does not need the Walrus or Tatum keys.
 | `MEMWAL_SERVER_URL` | `https://relayer.memory.walrus.xyz` |
 | `TATUM_API_KEY` | From the Tatum dashboard |
 | `TATUM_SUI_RPC_URL` | `https://sui-mainnet.gateway.tatum.io` |
-| `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` |
+| `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` (spot; not used for verdicts) |
+| `TATUM_OHLCV_URL` | `https://api.tatum.io/v4/data/rate/symbol/OHLCV` |
+| `TATUM_OHLCV_BATCH_URL` | `https://api.tatum.io/v4/data/rate/symbol/OHLCV/batch` |
 | `AI_GATEWAY_API_KEY` | Claim extraction |
 | `EXTRACT_MODEL` | Optional. Gateway model id, not a secret. Default `deepseek/deepseek-v4.1-flash` (DeepSeek V4.1 Flash). The API and Vercel do not read it. |
 | `DEMO_MODE` | `live` |
@@ -275,15 +304,15 @@ Seed is a one-off in the worker container's terminal, after the image is deploye
 
 ## Known open questions
 
-- `price_threshold` is priced by `getRate` in `lib/tatum.ts`, which calls the
-  Tatum rate endpoint (`TATUM_RATE_URL`, default
-  `https://api.tatum.io/v4/data/rate/symbol`) with `symbol` and `basePair`.
-  There is no CoinGecko client. The six seeded price claims are all `SUI` /
-  `USD`, so resolution asks for exactly that pair. Support for `symbol=SUI`
-  is unverified: the endpoint needs `TATUM_API_KEY`, and a 404 or a null
-  `value` becomes `void` ("the rate feed does not cover SUI/USD"). A void does
-  not move the score. Those six deadlines are 2026-10-30 and 2026-11-08, so
-  the seed does not call the rate endpoint.
+- `price_threshold` is judged from Tatum historical USD candles
+  (`/v4/data/rate/symbol/OHLCV`), not from the spot rate at the moment the
+  worker runs. A touch uses the hourly high or low over `[published_at, deadline]`
+  (daily candles only when hourly cannot be requested). A deadline claim uses
+  the hourly candle that contains the deadline. A missing symbol, a non-USD
+  quote, or a gap in the series is `void` and does not move the score. The
+  six seeded price claims are all touches, still pending until 2026-10-30 and
+  2026-11-08. `deadline_basis` records why that deadline was chosen; the
+  resolver does not invent one.
 - `restore()` has no pagination cursor and costs seconds per blob; large
   namespaces may not fully restore in one call.
 

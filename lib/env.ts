@@ -49,6 +49,16 @@ const schema = z.object({
     .string()
     .url()
     .default("https://api.tatum.io/v4/data/rate/symbol"),
+  /** One historical USD candle. Copy from the Tatum docs; do not build the host. */
+  TATUM_OHLCV_URL: z
+    .string()
+    .url()
+    .default("https://api.tatum.io/v4/data/rate/symbol/OHLCV"),
+  /** Up to 50 historical USD candles. Same host rule as TATUM_OHLCV_URL. */
+  TATUM_OHLCV_BATCH_URL: z
+    .string()
+    .url()
+    .default("https://api.tatum.io/v4/data/rate/symbol/OHLCV/batch"),
 
   DATABASE_URL: z.string().url().optional(),
   DEMO_MODE: z.enum(["live", "replay"]).default("live"),
@@ -57,6 +67,11 @@ const schema = z.object({
 export type Env = z.infer<typeof schema>;
 
 let cached: Env | null = null;
+
+/** Drop the cached parse. Tests use this; production reads env once. */
+export function resetEnvForTests(): void {
+  cached = null;
+}
 
 export function env(): Env {
   if (cached) return cached;

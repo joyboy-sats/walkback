@@ -17,6 +17,7 @@ import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, scoreIsShown, trustBand } from 
 import { formatCount, formatDateOnly, formatFixed, formatPercent } from "@/lib/locale-format";
 import { isLocale, type Locale } from "@/lib/locale";
 import { matchVoidReason, voidReasonValues } from "@/lib/void-reason";
+import { explainVoidReason } from "@/lib/verdict-reason";
 import VerdictBadge from "@/components/verdict-badge";
 import { TrustMeter } from "@/components/trust-meter";
 import { InspectIllustration } from "@/components/illustrations";
@@ -273,9 +274,7 @@ export default async function SourcePage({
 
                 {resolution && (
                   <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
-                    {resolution.outcome === "void"
-                      ? translatedVoid(voidCopy, resolution.reason)
-                      : resolution.reason}
+                    {displayReason(voidCopy, resolution.outcome, resolution.reason)}
                   </p>
                 )}
 
@@ -449,6 +448,16 @@ function Tally({
 async function uiLocale(): Promise<Locale> {
   const value = await getLocale();
   return isLocale(value) ? value : "en";
+}
+
+function displayReason(
+  t: Awaited<ReturnType<typeof getTranslations<"voidReason">>>,
+  outcome: "true" | "false" | "void",
+  reason: string,
+): string {
+  const explained = explainVoidReason(reason);
+  if (outcome !== "void") return explained;
+  return translatedVoid(t, explained);
 }
 
 function translatedVoid(

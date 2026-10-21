@@ -12,7 +12,7 @@
  * `balance_threshold`  — "holds at least N X" at the deadline.
  * `balance_change_since_ingest` — snapshot at ingest vs. balance at deadline.
  * `tx_replay`         — historical: replay transfers within a window.
- * `price_threshold`   — market price at the deadline.
+ * `price_threshold`   — a touch over [published_at, deadline], or the price at the deadline.
  * `manual`            — human verdict; the demo fallback.
  *
  * Note there is no `balance_delta` over past time: Tatum's Sui surface has no
@@ -27,6 +27,12 @@ export type ClaimType =
   | "manual";
 
 export type Direction = "gte" | "lte";
+
+/**
+ * `touch` — bullish: window high ≥ amount. Bearish: window low ≤ amount.
+ * `at_deadline` — the price printed at the deadline.
+ */
+export type PriceEvaluation = "touch" | "at_deadline";
 
 export interface BalanceThresholdParams {
   address: string;
@@ -56,11 +62,22 @@ export interface TxReplayParams {
 }
 
 export interface PriceThresholdParams {
-  /** Ticker as the rate API expects it, e.g. "SUI". */
+  /** Ticker as the rate API expects it, e.g. "SUI", "SOL", "ETH", "BTC". */
   symbol: string;
+  /** Historical Tatum candles are USD. Any other quote resolves void. */
   quote: string;
   direction: Direction;
+  /** Decimal price string, e.g. "1.28". */
   amount: string;
+  /**
+   * `touch`: high (gte) or low (lte) over [since, deadline].
+   * `at_deadline`: the print at `deadline`.
+   * Omitted on rows stored before this field existed. Adjudication treats
+   * that as `at_deadline` and says so in the evidence.
+   */
+  evaluation?: PriceEvaluation;
+  /** ISO publish time. The start of a touch window. */
+  since?: string;
 }
 
 export interface ManualParams {
@@ -128,8 +145,14 @@ export interface ExtractedClaim {
   quote: string;
   claimType: ClaimType;
   params: ClaimParams;
-  /** ISO timestamp. */
+  /** ISO timestamp. Required. The resolver does not invent one. */
   deadline: string;
+  /**
+   * Why `deadline` is that timestamp ("stated in post", "convention: trade call 7d").
+   * Recorded by the seed author or the extractor. The resolver does not read it
+   * to choose a time.
+   */
+  deadlineBasis?: string;
   /** 0..1. Below 0.6 is dropped before storage. */
   confidence: number;
 }
