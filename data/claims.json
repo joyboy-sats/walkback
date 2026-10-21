@@ -1,5 +1,5 @@
 {
-  "note": "Real X posts collected 2026-10-20 (SGT). Not synthetic. Text is the post text. Windows and deadlines on tx_replay were chosen when the posts were collected; the posts themselves do not state them. @mysqlsui and both balance_threshold claims (deadline 2026-10-22T00:00:00.000Z, 08:00 SGT) are omitted. Ids are lowercase slugs of the candidate ids, with underscores removed, so they match the seed validator.",
+  "note": "Real X posts collected 2026-10-20 (SGT). Not synthetic. Text is the post text. Windows and deadlines on tx_replay were chosen when the posts were collected; the posts themselves do not state them. @mysqlsui and both balance_threshold claims (deadline 2026-10-22T00:00:00.000Z, 08:00 SGT) are omitted. x-onchainwatch-2110064092434104572 is omitted: the quote names From 0x1ae70480 but the stored address is different, and that was its only claim. Ids are lowercase slugs of the candidate ids, with underscores removed, so they match the seed validator.",
   "posts": [
     {
       "id": "x-onchainwatch-2112521583134667061",
@@ -7,12 +7,12 @@
       "platform": "x",
       "published_at": "2026-10-20T12:29:28.000Z",
       "sui_address": "0xbaae485e643532b4597f5ef9018103191452cc5c49ad7a3f5c59d9272c75ba69",
-      "text": "🚨 SUI Whale Alert 🐋\n\n💰 2,075,237 $SUI (≈ $2,057,432)\n\n📤 From: 0x6edd3be9…\n📥 To: 0xbaae485e…\n\n🐳 From a top-200 $SUI wallet (#166)\n\n🔍 https://t.co/G4zZ1bmzjE\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 SUI Whale Alert \ud83d\udc0b\n\n\ud83d\udcb0 2,075,237 $SUI (\u2248 $2,057,432)\n\n\ud83d\udce4 From: 0x6edd3be9\u2026\n\ud83d\udce5 To: 0xbaae485e\u2026\n\n\ud83d\udc33 From a top-200 $SUI wallet (#166)\n\n\ud83d\udd0d https://t.co/G4zZ1bmzjE\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2112521583134667061",
       "claims": [
         {
-          "quote": "💰 2,075,237 $SUI (≈ $2,057,432)\n\n📤 From: 0x6edd3be9…\n📥 To: 0xbaae485e…",
+          "quote": "\ud83d\udcb0 2,075,237 $SUI (\u2248 $2,057,432)\n\n\ud83d\udce4 From: 0x6edd3be9\u2026\n\ud83d\udce5 To: 0xbaae485e\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0xbaae485e643532b4597f5ef9018103191452cc5c49ad7a3f5c59d9272c75ba69",
@@ -33,12 +33,12 @@
       "platform": "x",
       "published_at": "2026-10-20T08:59:10.000Z",
       "sui_address": "0x80eb2caa90f6a02beb2fa64382bad1737998d35248af070c9351fcc3e33fc2b8",
-      "text": "🚨 Large $SUI transfer spotted 🐋\n\n💰 1,812,734 $SUI (≈ $1,784,025)\n\n📤 From: 0x3bd2949d…\n📥 To: 0x80eb2caa…\n\n🐳 From a top-200 $SUI wallet (#83)\n🐋 Receiver now holds 6,975,435 $SUI\n\n🔍 https://t.co/oMELAxSpzi\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,812,734 $SUI (\u2248 $1,784,025)\n\n\ud83d\udce4 From: 0x3bd2949d\u2026\n\ud83d\udce5 To: 0x80eb2caa\u2026\n\n\ud83d\udc33 From a top-200 $SUI wallet (#83)\n\ud83d\udc0b Receiver now holds 6,975,435 $SUI\n\n\ud83d\udd0d https://t.co/oMELAxSpzi\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2112468657708093679",
       "claims": [
         {
-          "quote": "💰 1,812,734 $SUI (≈ $1,784,025)\n\n📤 From: 0x3bd2949d…\n📥 To: 0x80eb2caa…",
+          "quote": "\ud83d\udcb0 1,812,734 $SUI (\u2248 $1,784,025)\n\n\ud83d\udce4 From: 0x3bd2949d\u2026\n\ud83d\udce5 To: 0x80eb2caa\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x80eb2caa90f6a02beb2fa64382bad1737998d35248af070c9351fcc3e33fc2b8",
@@ -59,12 +59,12 @@
       "platform": "x",
       "published_at": "2026-10-20T07:56:53.000Z",
       "sui_address": "0x20e2c51ca852c8bc959eccf9e64c3083cba892dea64052c4d111247b9abae450",
-      "text": "🚨 Large $SUI transfer spotted 🐋\n\n💰 5,350,853 $SUI (≈ $5,295,718)\n\n📤 From: 0x20e2c51c…\n📥 To: 0x9d122b31…\n\n📈 11-day high for a single transfer\n🐳 Sender: #19 largest $SUI holder\n\n🔍 https://t.co/0ENF3rAtF0",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 5,350,853 $SUI (\u2248 $5,295,718)\n\n\ud83d\udce4 From: 0x20e2c51c\u2026\n\ud83d\udce5 To: 0x9d122b31\u2026\n\n\ud83d\udcc8 11-day high for a single transfer\n\ud83d\udc33 Sender: #19 largest $SUI holder\n\n\ud83d\udd0d https://t.co/0ENF3rAtF0",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2112452984638444019",
       "claims": [
         {
-          "quote": "💰 5,350,853 $SUI (≈ $5,295,718)\n\n📤 From: 0x20e2c51c…",
+          "quote": "\ud83d\udcb0 5,350,853 $SUI (\u2248 $5,295,718)\n\n\ud83d\udce4 From: 0x20e2c51c\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x20e2c51ca852c8bc959eccf9e64c3083cba892dea64052c4d111247b9abae450",
@@ -85,12 +85,12 @@
       "platform": "x",
       "published_at": "2026-10-20T06:51:29.000Z",
       "sui_address": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad",
-      "text": "🚨 Whale on the move 🐋\n\n💰 1,965,693 $SUI (≈ $1,946,936)\n\n📤 From: 0x5fdfcc18…\n📥 To: 0x7ab9a6a7…\n\n🐳 To a top-200 $SUI wallet (#1)\n🐋 Receiving wallet balance: 389,289,662 $SUI\n\n🔍 https://t.co/oUWQFMr1Rb\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Whale on the move \ud83d\udc0b\n\n\ud83d\udcb0 1,965,693 $SUI (\u2248 $1,946,936)\n\n\ud83d\udce4 From: 0x5fdfcc18\u2026\n\ud83d\udce5 To: 0x7ab9a6a7\u2026\n\n\ud83d\udc33 To a top-200 $SUI wallet (#1)\n\ud83d\udc0b Receiving wallet balance: 389,289,662 $SUI\n\n\ud83d\udd0d https://t.co/oUWQFMr1Rb\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2112436525434622020",
       "claims": [
         {
-          "quote": "💰 1,965,693 $SUI (≈ $1,946,936)\n\n📤 From: 0x5fdfcc18…",
+          "quote": "\ud83d\udcb0 1,965,693 $SUI (\u2248 $1,946,936)\n\n\ud83d\udce4 From: 0x5fdfcc18\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad",
@@ -111,12 +111,12 @@
       "platform": "x",
       "published_at": "2026-10-16T20:58:43.000Z",
       "sui_address": "0x6a0f71c0bd78e84a98052b1aaa8aba4ad649bdc3c41c4d0553d7ad81e833952c",
-      "text": "🚨 Large $SUI transfer spotted 🐋\n\n💰 1,102,763 $SUI (≈ $1,121,511)\n\n📤 From: 0xa2a1323d…\n📥 To: 0x6a0f71c0…\n\n🐳 To a top-200 $SUI wallet (#57)\n🐋 Receiving wallet balance: 11,556,926 $SUI\n\n🔍 https://t.co/jT8tHpxFoS\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,102,763 $SUI (\u2248 $1,121,511)\n\n\ud83d\udce4 From: 0xa2a1323d\u2026\n\ud83d\udce5 To: 0x6a0f71c0\u2026\n\n\ud83d\udc33 To a top-200 $SUI wallet (#57)\n\ud83d\udc0b Receiving wallet balance: 11,556,926 $SUI\n\n\ud83d\udd0d https://t.co/jT8tHpxFoS\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2111200188878475740",
       "claims": [
         {
-          "quote": "💰 1,102,763 $SUI (≈ $1,121,511)\n\n📤 From: 0xa2a1323d…\n📥 To: 0x6a0f71c0…",
+          "quote": "\ud83d\udcb0 1,102,763 $SUI (\u2248 $1,121,511)\n\n\ud83d\udce4 From: 0xa2a1323d\u2026\n\ud83d\udce5 To: 0x6a0f71c0\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x6a0f71c0bd78e84a98052b1aaa8aba4ad649bdc3c41c4d0553d7ad81e833952c",
@@ -137,12 +137,12 @@
       "platform": "x",
       "published_at": "2026-10-16T15:03:55.000Z",
       "sui_address": "0x341fa71e4e58d63668034125c3152f935b00b0bb5c68069045d8c646d017fae1",
-      "text": "🚨 Large SUI transfer spotted 🐋\n\n💰 2,000,000 $SUI (≈ $2,090,000)\n\n📤 From: 0x341fa71e…\n📥 To: 0x51f8fb27…\n\n🐳 Sender: #113 largest SUI holder\n🧹 Sending wallet fully cleared out\n\n🔍 https://t.co/6smTc4sBWK",
+      "text": "\ud83d\udea8 Large SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 2,000,000 $SUI (\u2248 $2,090,000)\n\n\ud83d\udce4 From: 0x341fa71e\u2026\n\ud83d\udce5 To: 0x51f8fb27\u2026\n\n\ud83d\udc33 Sender: #113 largest SUI holder\n\ud83e\uddf9 Sending wallet fully cleared out\n\n\ud83d\udd0d https://t.co/6smTc4sBWK",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2111110899293458705",
       "claims": [
         {
-          "quote": "💰 2,000,000 $SUI (≈ $2,090,000)\n\n📤 From: 0x341fa71e…",
+          "quote": "\ud83d\udcb0 2,000,000 $SUI (\u2248 $2,090,000)\n\n\ud83d\udce4 From: 0x341fa71e\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x341fa71e4e58d63668034125c3152f935b00b0bb5c68069045d8c646d017fae1",
@@ -163,12 +163,12 @@
       "platform": "x",
       "published_at": "2026-10-15T16:02:35.000Z",
       "sui_address": "0x2de3bc906d1fa9c85e44cf9b0642447126879cb776f5ee3749bd2e32247ba52e",
-      "text": "🚨 Big SUI movement detected 🐋\n\n💰 1,000,000 $SUI (≈ $1,029,000)\n\n📤 From: 0x2de3bc90…\n📥 To: #KuCoin\n\n📥 Coins moved to an exchange, which can precede selling.\n\n🐳 Sender: #89 largest $SUI holder\n\n🔍 https://t.co/W1LaWGqDTK\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Big SUI movement detected \ud83d\udc0b\n\n\ud83d\udcb0 1,000,000 $SUI (\u2248 $1,029,000)\n\n\ud83d\udce4 From: 0x2de3bc90\u2026\n\ud83d\udce5 To: #KuCoin\n\n\ud83d\udce5 Coins moved to an exchange, which can precede selling.\n\n\ud83d\udc33 Sender: #89 largest $SUI holder\n\n\ud83d\udd0d https://t.co/W1LaWGqDTK\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2110763273754640768",
       "claims": [
         {
-          "quote": "💰 1,000,000 $SUI (≈ $1,029,000)\n\n📤 From: 0x2de3bc90…",
+          "quote": "\ud83d\udcb0 1,000,000 $SUI (\u2248 $1,029,000)\n\n\ud83d\udce4 From: 0x2de3bc90\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x2de3bc906d1fa9c85e44cf9b0642447126879cb776f5ee3749bd2e32247ba52e",
@@ -189,12 +189,12 @@
       "platform": "x",
       "published_at": "2026-10-15T15:13:43.000Z",
       "sui_address": "0x4c308e73bd97118d799bd478c060dad2751a6d5122673102adab5ab7eaaaee23",
-      "text": "🚨 SUI Whale Alert 🐋\n\n💰 1,043,267 $SUI (≈ $1,052,656)\n\n📤 From: 0x4c308e73…\n📥 To: 0x51562a3b…\n\n🐳 Receiver: #156 largest $SUI holder\n🐋 Receiving wallet balance: 2,234,918 $SUI\n\n🔍 https://t.co/OEwDqtQdFP",
+      "text": "\ud83d\udea8 SUI Whale Alert \ud83d\udc0b\n\n\ud83d\udcb0 1,043,267 $SUI (\u2248 $1,052,656)\n\n\ud83d\udce4 From: 0x4c308e73\u2026\n\ud83d\udce5 To: 0x51562a3b\u2026\n\n\ud83d\udc33 Receiver: #156 largest $SUI holder\n\ud83d\udc0b Receiving wallet balance: 2,234,918 $SUI\n\n\ud83d\udd0d https://t.co/OEwDqtQdFP",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2110750976411885808",
       "claims": [
         {
-          "quote": "💰 1,043,267 $SUI (≈ $1,052,656)\n\n📤 From: 0x4c308e73…",
+          "quote": "\ud83d\udcb0 1,043,267 $SUI (\u2248 $1,052,656)\n\n\ud83d\udce4 From: 0x4c308e73\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x4c308e73bd97118d799bd478c060dad2751a6d5122673102adab5ab7eaaaee23",
@@ -215,12 +215,12 @@
       "platform": "x",
       "published_at": "2026-10-15T06:16:16.000Z",
       "sui_address": "0xdad8b77b746f38cbac5044eb7b2c7232f9e38f30e2868f0e5bf311cd83554b5a",
-      "text": "🚨 Big SUI movement detected 🐋\n\n💰 1,846,275 $SUI (≈ $1,831,682)\n\n📤 From: 0xdad8b77b…\n📥 To: #OKX\n\n📥 Exchange deposit detected. Possible sell pressure ahead?\n\n🐳 Sender: #4 largest $SUI holder\n\n🔍 https://t.co/TtfcamiY6r\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Big SUI movement detected \ud83d\udc0b\n\n\ud83d\udcb0 1,846,275 $SUI (\u2248 $1,831,682)\n\n\ud83d\udce4 From: 0xdad8b77b\u2026\n\ud83d\udce5 To: #OKX\n\n\ud83d\udce5 Exchange deposit detected. Possible sell pressure ahead?\n\n\ud83d\udc33 Sender: #4 largest $SUI holder\n\n\ud83d\udd0d https://t.co/TtfcamiY6r\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2110615724871885192",
       "claims": [
         {
-          "quote": "💰 1,846,275 $SUI (≈ $1,831,682)\n\n📤 From: 0xdad8b77b…",
+          "quote": "\ud83d\udcb0 1,846,275 $SUI (\u2248 $1,831,682)\n\n\ud83d\udce4 From: 0xdad8b77b\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0xdad8b77b746f38cbac5044eb7b2c7232f9e38f30e2868f0e5bf311cd83554b5a",
@@ -241,12 +241,12 @@
       "platform": "x",
       "published_at": "2026-10-14T11:07:22.000Z",
       "sui_address": "0x1f2e2700525b704214930cd2c9f6599c6460698339a6ab1f6a1e1c80dbc50959",
-      "text": "🚨 Large $SUI transfer spotted 🐋\n\n💰 1,765,499 $SUI (≈ $1,864,368)\n\n📤 From: #Cryptocom\n📥 To: 0x1f2e2700…\n\n📤 Coins left an exchange, often a sign of accumulation.\n\n🔍 https://t.co/VwSMPXIyK9\n\n#OnChainWatch #WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,765,499 $SUI (\u2248 $1,864,368)\n\n\ud83d\udce4 From: #Cryptocom\n\ud83d\udce5 To: 0x1f2e2700\u2026\n\n\ud83d\udce4 Coins left an exchange, often a sign of accumulation.\n\n\ud83d\udd0d https://t.co/VwSMPXIyK9\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2110326592278790611",
       "claims": [
         {
-          "quote": "💰 1,765,499 $SUI (≈ $1,864,368)\n\n📤 From: #Cryptocom\n📥 To: 0x1f2e2700…",
+          "quote": "\ud83d\udcb0 1,765,499 $SUI (\u2248 $1,864,368)\n\n\ud83d\udce4 From: #Cryptocom\n\ud83d\udce5 To: 0x1f2e2700\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x1f2e2700525b704214930cd2c9f6599c6460698339a6ab1f6a1e1c80dbc50959",
@@ -262,43 +262,17 @@
       ]
     },
     {
-      "id": "x-onchainwatch-2110064092434104572",
-      "handle": "_OnChainWatch",
-      "platform": "x",
-      "published_at": "2026-10-13T17:44:17.000Z",
-      "sui_address": "0x432875d9abcd8d3ed46e344b7dbeae952d014e8c26fc650e7503417a292cf43d",
-      "text": "🚨 Whale on the move 🐋\n\n💰 2,999,999 $SUI (≈ $3,171,000)\n\n📤 From: 0x1ae70480…\n📥 To: #Bitfinex\n\n📥 Exchange deposit detected. Possible sell pressure ahead?\n\n🧹 That was the sender's entire balance\n\n🔍 https://t.co/QErLcWo37G\n\n#OnChainWatch #WhaleAlert #SUI",
-      "snapshot": null,
-      "source_url": "https://x.com/_OnChainWatch/status/2110064092434104572",
-      "claims": [
-        {
-          "quote": "💰 2,999,999 $SUI (≈ $3,171,000)\n\n📤 From: 0x1ae70480…\n📥 To: #Bitfinex",
-          "claim_type": "tx_replay",
-          "params": {
-            "address": "0x432875d9abcd8d3ed46e344b7dbeae952d014e8c26fc650e7503417a292cf43d",
-            "asset": "0x2::sui::SUI",
-            "since": "2026-10-13T14:41:00.000Z",
-            "until": "2026-10-13T17:46:00.000Z",
-            "direction": "gte",
-            "amount": "2999999000000000"
-          },
-          "deadline": "2026-10-13T17:46:00.000Z",
-          "confidence": 0.9
-        }
-      ]
-    },
-    {
       "id": "x-onchainwatch-2109915055093399909",
       "handle": "_OnChainWatch",
       "platform": "x",
       "published_at": "2026-10-13T07:52:04.000Z",
       "sui_address": "0x376afef39c3016ed9459e149f3cda2dcb5d9a0d4ef189d84b9b70060c30471da",
-      "text": "🚨 Whale on the move 🐋\n\n💰 2,344,991 $SUI (≈ $2,518,521)\n\n📤 From: #Bybit\n📥 To: 0x376afef3…\n\n📤 Exchange outflow: withdrawals like this often mean long-term holding.\n\n🔍 https://t.co/Rymm8fCTCu\n\n#WhaleAlert #SUI",
+      "text": "\ud83d\udea8 Whale on the move \ud83d\udc0b\n\n\ud83d\udcb0 2,344,991 $SUI (\u2248 $2,518,521)\n\n\ud83d\udce4 From: #Bybit\n\ud83d\udce5 To: 0x376afef3\u2026\n\n\ud83d\udce4 Exchange outflow: withdrawals like this often mean long-term holding.\n\n\ud83d\udd0d https://t.co/Rymm8fCTCu\n\n#WhaleAlert #SUI",
       "snapshot": null,
       "source_url": "https://x.com/_OnChainWatch/status/2109915055093399909",
       "claims": [
         {
-          "quote": "💰 2,344,991 $SUI (≈ $2,518,521)\n\n📤 From: #Bybit\n📥 To: 0x376afef3…",
+          "quote": "\ud83d\udcb0 2,344,991 $SUI (\u2248 $2,518,521)\n\n\ud83d\udce4 From: #Bybit\n\ud83d\udce5 To: 0x376afef3\u2026",
           "claim_type": "tx_replay",
           "params": {
             "address": "0x376afef39c3016ed9459e149f3cda2dcb5d9a0d4ef189d84b9b70060c30471da",
@@ -384,11 +358,11 @@
       "handle": "cryptowithgopal",
       "platform": "x",
       "published_at": "2026-10-17T10:59:35.000Z",
-      "text": "$SUI forming a falling wedge on the 4H chart 👀📉\n\nBulls are trying to defend the $0.95–$1.00 support zone! A breakout above $1.08–$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target 🎯📈🔥\n\nA clean breakout could shift momentum in favor of buyers, while losing $0.95 may weaken the setup.\n\nSentiment: Cautiously bullish — waiting for breakout confirmation! 🚀\n\n$SUI #SUI #Crypto #Altcoins #TechnicalAnalysis",
+      "text": "$SUI forming a falling wedge on the 4H chart \ud83d\udc40\ud83d\udcc9\n\nBulls are trying to defend the $0.95\u2013$1.00 support zone! A breakout above $1.08\u2013$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target \ud83c\udfaf\ud83d\udcc8\ud83d\udd25\n\nA clean breakout could shift momentum in favor of buyers, while losing $0.95 may weaken the setup.\n\nSentiment: Cautiously bullish \u2014 waiting for breakout confirmation! \ud83d\ude80\n\n$SUI #SUI #Crypto #Altcoins #TechnicalAnalysis",
       "source_url": "https://x.com/cryptowithgopal/status/2111411796250861956",
       "claims": [
         {
-          "quote": "A breakout above $1.08–$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target",
+          "quote": "A breakout above $1.08\u2013$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target",
           "claim_type": "price_threshold",
           "params": {
             "symbol": "SUI",
@@ -406,7 +380,7 @@
       "handle": "HODLnex",
       "platform": "x",
       "published_at": "2026-10-16T08:11:38.000Z",
-      "text": "$SUI Bulls Are Back in Action — Can Price Break Above $1.05 and Target $1.10?\n\nTrade Setup: Long\n\nEntry Zone: $1.0350 – $1.0450 TP1: $1.0570 TP2: $1.0750 TP3: $1.1000 SL: $1.0150\n\n🚀 Join Our Official Telegram & Get VIP Access ➡️ https://t.co/pf56UgyGTc",
+      "text": "$SUI Bulls Are Back in Action \u2014 Can Price Break Above $1.05 and Target $1.10?\n\nTrade Setup: Long\n\nEntry Zone: $1.0350 \u2013 $1.0450 TP1: $1.0570 TP2: $1.0750 TP3: $1.1000 SL: $1.0150\n\n\ud83d\ude80 Join Our Official Telegram & Get VIP Access \u27a1\ufe0f https://t.co/pf56UgyGTc",
       "source_url": "https://x.com/HODLnex/status/2111007143029625287",
       "claims": [
         {
@@ -428,7 +402,7 @@
       "handle": "gandreou007",
       "platform": "x",
       "published_at": "2026-10-20T05:30:00.000Z",
-      "text": "⚡ $SUI: THE NEXT MOVE COULD START WITH A RETEST OF 0.85.\n\nPrice has broken the inner descending trendline, but the larger resistance remains overhead.\n\nThe scenario starts with a pullback into 0.82–0.88. Holding this zone could establish a higher low before another attempt at the major trendline.\n\nA confirmed breakout and successful retest would bring 1.25–1.32 and 1.38–1.45 into focus.\n\nBeyond that, the Fibonacci extension near 1.70 provides another checkpoint before the 1.95–2.05 region.\n\nReaching 2.00 from 0.85 would represent approximately 135% upside.\n\nLosing 0.82 would weaken this setup and expose the lower 0.65–0.72 support.",
+      "text": "\u26a1 $SUI: THE NEXT MOVE COULD START WITH A RETEST OF 0.85.\n\nPrice has broken the inner descending trendline, but the larger resistance remains overhead.\n\nThe scenario starts with a pullback into 0.82\u20130.88. Holding this zone could establish a higher low before another attempt at the major trendline.\n\nA confirmed breakout and successful retest would bring 1.25\u20131.32 and 1.38\u20131.45 into focus.\n\nBeyond that, the Fibonacci extension near 1.70 provides another checkpoint before the 1.95\u20132.05 region.\n\nReaching 2.00 from 0.85 would represent approximately 135% upside.\n\nLosing 0.82 would weaken this setup and expose the lower 0.65\u20130.72 support.",
       "source_url": "https://x.com/gandreou007/status/2112416018446565762",
       "claims": [
         {

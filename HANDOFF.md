@@ -97,11 +97,13 @@ assume order. Dedupe on `blob_id`.
 ## Task 4 — Seed data
 
 `scripts/seed.ts` reads `data/claims.json`. The committed file is real X posts
-collected 2026-10-20 (SGT): 18 posts, 18 claims, 7 handles. None are synthetic.
+collected 2026-10-20 (SGT): 17 posts, 17 claims, 7 handles. None are synthetic.
 
-- 12 `tx_replay` claims from `@_OnChainWatch`. Deadlines are on or before
+- 11 `tx_replay` claims from `@_OnChainWatch`. Deadlines are on or before
   2026-10-20, so a seed run resolves them. Each post sets `"snapshot": null`
-  so ingest does not read a live balance.
+  so ingest does not read a live balance. The post whose quote says
+  `From: 0x1ae70480` while the stored address differed is omitted; it had no
+  other claim.
 - 6 `price_threshold` claims, every one `SUI`/`USD`. Deadlines are
   2026-10-30 and 2026-11-08, so the seed leaves them pending. Pricing is
   Tatum `getRate`. SUI/USD support is unverified.
@@ -112,19 +114,20 @@ Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
 exceed the 30 points/min delegate limit; `memwalWriteLimiter` handles it.
 
-On the machine that holds `.env.local` (delegate key and `TATUM_API_KEY`; not
-Vercel):
+Postgres is Coolify-internal. Run the seed in the worker container's terminal
+after the image that contains this file is deployed. Boot applies migrations.
+The container already has `DATABASE_URL`, `MEMWAL_PRIVATE_KEY`, and
+`TATUM_API_KEY`. The image includes `scripts/`, `data/claims.json`, and `tsx`.
 
 ```bash
-npm run db:migrate
 npm run seed
 npm run list:memories
 ```
 
 On an empty delegate that accepts every write, the run adds 7 source memories,
-18 claim memories, 12 resolution memories, and one score memory per replay
+17 claim memories, 11 resolution memories, and one score memory per replay
 verdict that is `true` or `false`. A `void` writes a resolution and no score.
-That is 37 memories if every replay is void, and 49 if every replay is true
+That is 35 memories if every replay is void, and 46 if every replay is true
 or false. `list:memories` prints the account total.
 
 **Acceptance:** re-running `npm run seed` twice does not double the ledger, and

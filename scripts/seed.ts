@@ -4,13 +4,16 @@
  *   npm run seed
  *   npm run seed -- data/claims.json
  *
+ * Run this in the Coolify worker container's terminal. That container already
+ * has DATABASE_URL, the Walrus delegate key, and TATUM_API_KEY. Postgres is
+ * on Coolify's internal network, so a laptop cannot open it. Migrations apply
+ * when the worker and the API boot; this script does not migrate.
+ *
  * The committed file is real posts. An entry with `synthetic: true` is a demo
  * fallback and is labelled as such. This script refuses to invent claims of
- * its own. Needs DATABASE_URL and the Walrus delegate key. Apply migrations
- * first (`npm run db:migrate`): seed does not. The committed file sets
- * `claims` on every post and `snapshot: null` on replays, so it does not call
- * the model. It does call Tatum, because tx_replay claims whose deadlines
- * have passed are resolved at the end of the run.
+ * its own. Every post already has `claims`, and replay posts set
+ * `snapshot: null`, so the model is not called. It does call Tatum, because
+ * tx_replay claims whose deadlines have passed are resolved at the end.
  */
 import "dotenv/config";
 import { config } from "dotenv";
@@ -20,7 +23,8 @@ config({ path: ".env.local" });
 if (!process.env.DATABASE_URL?.trim()) {
   console.error(
     "DATABASE_URL is not set.\n" +
-      "Seed runs on the Coolify worker host, next to Postgres. Add DATABASE_URL to .env.local there.\n" +
+      "Run this in the Coolify worker container's terminal. That process already has DATABASE_URL.\n" +
+      "The database is on Coolify's internal network, so a laptop cannot open it.\n" +
       "Do not copy .env.example onto Vercel. Vercel never receives DATABASE_URL.",
   );
   process.exit(1);

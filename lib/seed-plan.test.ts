@@ -21,11 +21,11 @@ describe("data/claims.json", () => {
     (post.claims ?? []).map((claim) => ({ post, claim })),
   );
 
-  it("is the real set: 18 posts, 18 claims, no synthetic rows", () => {
-    expect(file.posts).toHaveLength(18);
-    expect(claims).toHaveLength(18);
+  it("is the real set: 17 posts, 17 claims, no synthetic rows", () => {
+    expect(file.posts).toHaveLength(17);
+    expect(claims).toHaveLength(17);
     expect(file.posts.filter(isSynthetic)).toHaveLength(0);
-    expect(claims.filter(({ claim }) => claim.claim_type === "tx_replay")).toHaveLength(12);
+    expect(claims.filter(({ claim }) => claim.claim_type === "tx_replay")).toHaveLength(11);
     expect(claims.filter(({ claim }) => claim.claim_type === "price_threshold")).toHaveLength(6);
     expect(claims.filter(({ claim }) => claim.claim_type === "balance_threshold")).toHaveLength(0);
     expect(new Set(file.posts.map((p) => p.handle)).size).toBe(7);
@@ -64,18 +64,16 @@ describe("data/claims.json", () => {
         pendingPrice.push(post.id);
       }
     }
-    expect(dueReplay).toHaveLength(12);
+    expect(dueReplay).toHaveLength(11);
     expect(pendingPrice).toHaveLength(6);
     expect(pendingPrice.every((id) => claims.find((c) => c.post.id === id)!.claim.deadline >= "2026-10-30")).toBe(
       true,
     );
   });
 
-  it("keeps the Bitfinex post address the collector stored, which is not the From prefix in the quote", () => {
-    const post = file.posts.find((p) => p.id === "x-onchainwatch-2110064092434104572");
-    expect(post?.sui_address).toBe("0x432875d9abcd8d3ed46e344b7dbeae952d014e8c26fc650e7503417a292cf43d");
-    expect(post?.text).toContain("0x1ae70480");
-    expect(post?.claims?.[0]?.params.address).toBe(post?.sui_address);
+  it("omits the replay whose quote names a different address than the one stored", () => {
+    expect(file.posts.some((p) => p.id === "x-onchainwatch-2110064092434104572")).toBe(false);
+    expect(file.posts.some((p) => p.text.includes("0x1ae70480"))).toBe(false);
   });
 });
 

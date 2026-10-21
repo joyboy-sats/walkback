@@ -109,8 +109,8 @@ From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
 ## Adding claims
 
 `npm run seed` reads `data/claims.json` and runs each post through the same
-ingest path as the app. The file in the repo is the real set: 18 posts, 18
-claims, 7 handles. Twelve are `tx_replay` posts from `@_OnChainWatch`. Six are
+ingest path as the app. The file in the repo is the real set: 17 posts, 17
+claims, 7 handles. Eleven are `tx_replay` posts from `@_OnChainWatch`. Six are
 `price_threshold` posts, all `SUI` against `USD`. None are marked synthetic.
 `@mysqlsui` and both `balance_threshold` claims were left out on purpose.
 Each post has `source_url`, the permalink of the original X post. The feed
@@ -147,20 +147,23 @@ for a live balance. Omit `snapshot` to read the live balance at seed time.
 The replay posts in the file use `null`, because a live balance is not the
 receipt for a past transfer.
 
-Apply migrations before the first seed. `npm run seed` does not. On a machine
-that has `.env.local` (not Vercel):
+Postgres is on Coolify's internal network. A laptop cannot open `DATABASE_URL`.
+Run the seed in the Coolify **worker** container's terminal, after this image
+is deployed. The worker and the API apply `drizzle/` on boot, including
+`claims.source_url`. `npm run seed` does not migrate. The container already
+has `DATABASE_URL`, `MEMWAL_PRIVATE_KEY`, and `TATUM_API_KEY`.
 
 ```bash
-npm run db:migrate
 npm run seed
 npm run list:memories
 ```
 
-`TATUM_API_KEY` is required: the twelve replay deadlines are already past, so
+`TATUM_API_KEY` is required: the eleven replay deadlines are already past, so
 the seed resolves them. `AI_GATEWAY_API_KEY` is not, because every post
 already has `claims`. The summary prints memory counts per namespace, every
 blob id, and the score of each source. `list:memories` prints the whole
-delegate account, not only this run.
+delegate account, not only this run. The worker image includes `scripts/`,
+`data/claims.json`, and `tsx`, which those two commands need.
 
 ## Deployment
 
@@ -254,7 +257,7 @@ The API does not need the Walrus or Tatum keys.
 | `WORKER_POLL_MS` | Optional. Default `2000`. |
 | `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. The pass enqueues only when a claim is pending and past its deadline, and it waits longer after a claim's resolve keeps throwing. |
 
-Seed is a one-off with the worker’s environment: `npm run seed`.
+Seed is a one-off in the worker container's terminal, after the image is deployed: `npm run seed`, then `npm run list:memories`. The worker image includes `scripts/`, `data/claims.json`, and `tsx`.
 
 ## Known open questions
 
