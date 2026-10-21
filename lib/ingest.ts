@@ -29,7 +29,7 @@ import { pendingWrites } from "./durable-writes";
 import { extractClaims } from "./extract";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
 import { logMemories } from "./memory-log";
-import { writeMemoriesDurable, type MemoryWrite } from "./memwal";
+import { writeMemoriesDurable, type MemoryWrite, type WriteObserver } from "./memwal";
 import { claimMemory, sourceMemory } from "./memory-text";
 import { findPersistedKeys } from "./persisted-keys";
 import { claimIndexFromExternalId, planSeedPost, type SeedPostDecision } from "./seed-plan";
@@ -317,17 +317,17 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
  * next item is sent. Items already recorded are not sent again. A failure
  * stops the rest; the successes stay recorded, so a retry continues there.
  */
-export async function persistIngestWrites(writes: MemoryWrite[]): Promise<string[]> {
+export async function persistIngestWrites(writes: MemoryWrite[], observer?: WriteObserver): Promise<string[]> {
   const known = await findPersistedKeys(writes);
   const pending = pendingWrites(writes, known);
   const fresh: string[] = [];
-  const { error } = await writeMemoriesDurable(pending, async (write, result) => {
+  const { error, cause } = await writeMemoriesDurable(pending, async (write, result) => {
     await logMemories([write], [{ id: result.id, blobId: result.blobId, namespace: write.namespace }]);
     await stampBlob(write.idempotencyKey, result.blobId);
     fresh.push(result.blobId);
-  });
+  }, observer);
   if (error) {
-    throw new Error(`memory write stopped after ${fresh.length} new blob(s): ${error}`);
+    throw new Error(`memory write stopped after ${fresh.length} new blob(s): ${error}`, cause ? { cause } : undefined);
   }
   return fresh;
 }

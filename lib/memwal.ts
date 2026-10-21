@@ -27,6 +27,7 @@
 import "server-only";
 
 import { MemWal } from "@mysten-incubation/memwal";
+import { errorMessage, isDeadlineError, withFetchDeadline, withRetry } from "./bounded";
 import { writeDurable, type DurableStepResult } from "./durable-writes";
 import { isReplay } from "./env";
 import { requireMemwalConfig } from "./memwal-config";
@@ -43,6 +44,28 @@ import type { Namespace } from "./types";
 
 /** Server-side hard limit for one bulk call. */
 export const BULK_MAX = 20;
+
+/**
+ * Poll budget passed to `rememberAndWait`. A healthy write is ~24s; this is
+ * the SDK's own deadline for a job that stays `running`.
+ */
+export const REMEMBER_POLL_TIMEOUT_MS = 180_000;
+
+/**
+ * Deadline for the whole `rememberAndWait` call, including the SEAL session
+ * build that happens before the poll timer starts.
+ *
+ * Measured writes finish in well under a minute. 60s on top of the poll
+ * budget covers session setup and the accept POST. A `getObject` that never
+ * returns used to sit here with no error; this is the bound that fires.
+ */
+export const REMEMBER_CALL_TIMEOUT_MS = REMEMBER_POLL_TIMEOUT_MS + 60_000;
+
+/** One try plus two retries. Each try has the deadline above. */
+export const REMEMBER_ATTEMPTS = 3;
+
+/** Backoff after the first failed attempt. The next wait doubles, capped at 30s. */
+export const REMEMBER_BACKOFF_MS = 2_000;
 
 let client: MemWal | null = null;
 
@@ -81,6 +104,25 @@ function toResult(r: {
   return { id: r.id, blobId: r.blob_id, owner: r.owner, namespace: r.namespace };
 }
 
+export interface WriteObserver {
+  onStart?: (write: MemoryWrite) => void;
+  onDone?: (write: MemoryWrite, result: { blobId: string; id?: string; elapsedMs: number }) => void;
+  onRetry?: (
+    write: MemoryWrite,
+    info: { attempt: number; attempts: number; delayMs: number; error: string },
+  ) => void;
+}
+
+export interface RememberOptions {
+  observer?: WriteObserver;
+  /** Outer deadline for one attempt, including SEAL session setup. */
+  timeoutMs?: number;
+  attempts?: number;
+  backoffMs?: number;
+  maxBackoffMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
  * Write one memory and wait for its blob_id.
  *
@@ -88,21 +130,69 @@ function toResult(r: {
  * being written — `claim:{claimId}`, `resolution:{claimId}`,
  * `score:{sourceId}:v{n}` — so a retry after a network failure does not
  * duplicate or re-bill the write.
+ *
+ * `rememberAndWait`'s `timeoutMs` only bounds the status poll. `signedRequest`
+ * awaits `buildSealSession()` first, and `SessionKey.create` reads the package
+ * object from Sui with no deadline. A stalled fullnode call never rejects, so
+ * the poll timer never starts. `withFetchDeadline` bounds that whole call and
+ * aborts `fetch`. On that timeout the client is destroyed: its session build
+ * is single-flight, and every later request on the same instance would wait
+ * on the same hung promise. The retry uses a new client and the same key.
  */
-export async function writeMemory(w: MemoryWrite): Promise<MemoryWriteResult> {
+export async function writeMemory(w: MemoryWrite, options?: RememberOptions): Promise<MemoryWriteResult> {
   if (isReplay()) {
     throw new Error(
       "writeMemory called in replay mode. The demo must not write to mainnet; " +
         "gate the caller on isReplay() instead.",
     );
   }
-  await memwalWriteLimiter.acquire();
-  const res = await getClient().rememberAndWait(w.text, w.namespace, {
-    idempotencyKey: w.idempotencyKey,
-    pollIntervalMs: 1000,
-    timeoutMs: 180_000,
-  });
-  return toResult(res);
+  const timeoutMs = options?.timeoutMs ?? REMEMBER_CALL_TIMEOUT_MS;
+  const attempts = options?.attempts ?? REMEMBER_ATTEMPTS;
+  const backoffMs = options?.backoffMs ?? REMEMBER_BACKOFF_MS;
+  options?.observer?.onStart?.(w);
+  const started = Date.now();
+  const result = await withRetry(
+    async () => {
+      await memwalWriteLimiter.acquire();
+      try {
+        const res = await withFetchDeadline(
+          () =>
+            getClient().rememberAndWait(w.text, w.namespace, {
+              idempotencyKey: w.idempotencyKey,
+              pollIntervalMs: 1000,
+              timeoutMs: REMEMBER_POLL_TIMEOUT_MS,
+            }),
+          timeoutMs,
+          `MemWal remember ${w.idempotencyKey}`,
+        );
+        return toResult(res);
+      } catch (err) {
+        // Our deadline means the call did not settle. The hung session build
+        // is single-flight on this client, so the next attempt must be a new
+        // instance. An SDK poll timeout settles on its own and keeps the client.
+        if (isDeadlineError(err)) destroyMemwal();
+        throw err;
+      }
+    },
+    {
+      attempts,
+      backoffMs,
+      ...(options?.maxBackoffMs !== undefined ? { maxBackoffMs: options.maxBackoffMs } : {}),
+      ...(options?.sleep ? { sleep: options.sleep } : {}),
+      onRetry(info) {
+        const error = errorMessage(info.error);
+        if (options?.observer?.onRetry) {
+          options.observer.onRetry(w, { attempt: info.attempt, attempts: info.attempts, delayMs: info.delayMs, error });
+        } else {
+          console.warn(
+            `[memwal] ${w.idempotencyKey} attempt ${info.attempt}/${info.attempts} failed; retrying in ${info.delayMs}ms: ${error}`,
+          );
+        }
+      },
+    },
+  );
+  options?.observer?.onDone?.(w, { blobId: result.blobId, id: result.id, elapsedMs: Date.now() - started });
+  return result;
 }
 
 /**
@@ -129,14 +219,15 @@ export interface BulkItemOutcome {
 export async function writeMemoriesDurable(
   items: readonly MemoryWrite[],
   onPersisted: (item: MemoryWrite, result: DurableStepResult) => Promise<void>,
-): Promise<{ error?: string }> {
+  observer?: WriteObserver,
+): Promise<{ error?: string; cause?: unknown }> {
   if (isReplay()) throw new Error("writeMemoriesDurable called in replay mode.");
-  const { error } = await writeDurable(items, rememberOne, onPersisted);
-  return error ? { error } : {};
+  const { error, cause } = await writeDurable(items, (item) => rememberOne(item, observer), onPersisted);
+  return error ? { error, ...(cause !== undefined ? { cause } : {}) } : {};
 }
 
-async function rememberOne(item: MemoryWrite): Promise<DurableStepResult> {
-  const res = await writeMemory(item);
+async function rememberOne(item: MemoryWrite, observer?: WriteObserver): Promise<DurableStepResult> {
+  const res = await writeMemory(item, observer ? { observer } : undefined);
   return { blobId: res.blobId, id: res.id };
 }
 

@@ -41,6 +41,22 @@ export interface ResolveReport {
   skipped?: string;
 }
 
+export interface ResolveHooks {
+  onList?: (ids: readonly string[]) => void;
+  onClaimStart?: (claimId: string) => void;
+  onClaimDone?: (report: ResolveReport, elapsedMs: number) => void;
+  onClaimError?: (claimId: string, error: string, elapsedMs: number) => void;
+  /** Return true to stop the batch after the error has been recorded. */
+  stopOnError?: (err: unknown) => boolean;
+}
+
+export interface ResolveBatch {
+  reports: ResolveReport[];
+  errors: Array<{ claimId: string; error: string }>;
+  /** Set when `stopOnError` ended the batch before every id was tried. */
+  stopped?: string;
+}
+
 /**
  * Resolve one claim and fold the result into the source's trust.
  *
@@ -153,13 +169,14 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
   const known = await findPersistedKeys(writes);
   const pending = pendingWrites(writes, known);
   const blobs = new Map<string, string>();
-  const { error } = await writeMemoriesDurable(pending, async (write, result) => {
+  const { error, cause } = await writeMemoriesDurable(pending, async (write, result) => {
     await logMemories([write], [{ id: result.id, blobId: result.blobId, namespace: write.namespace }]);
     blobs.set(write.idempotencyKey, result.blobId);
   });
   if (error) {
     throw new Error(
       `failed to persist a memory for claim ${claim.id} after ${blobs.size} new blob(s): ${error}`,
+      cause ? { cause } : undefined,
     );
   }
 
@@ -240,15 +257,23 @@ export async function listDueClaimIds(now = new Date(), limit = 25): Promise<str
 export async function resolveClaimsById(
   ids: readonly string[],
   now = new Date(),
-): Promise<{ reports: ResolveReport[]; errors: Array<{ claimId: string; error: string }> }> {
+  hooks?: ResolveHooks,
+): Promise<ResolveBatch> {
   const reports: ResolveReport[] = [];
   const errors: Array<{ claimId: string; error: string }> = [];
 
   for (const id of ids) {
+    const started = Date.now();
+    hooks?.onClaimStart?.(id);
     try {
-      reports.push(await resolveClaim(id, now));
+      const report = await resolveClaim(id, now);
+      hooks?.onClaimDone?.(report, Date.now() - started);
+      reports.push(report);
     } catch (err) {
-      errors.push({ claimId: id, error: err instanceof Error ? err.message : String(err) });
+      const error = err instanceof Error ? err.message : String(err);
+      hooks?.onClaimError?.(id, error, Date.now() - started);
+      errors.push({ claimId: id, error });
+      if (hooks?.stopOnError?.(err)) return { reports, errors, stopped: error };
     }
   }
 
@@ -265,8 +290,11 @@ export async function resolveClaimsById(
 export async function resolveDueClaims(
   now = new Date(),
   limit = 25,
-): Promise<{ reports: ResolveReport[]; errors: Array<{ claimId: string; error: string }> }> {
-  return resolveClaimsById(await listDueClaimIds(now, limit), now);
+  hooks?: ResolveHooks,
+): Promise<ResolveBatch> {
+  const ids = await listDueClaimIds(now, limit);
+  hooks?.onList?.(ids);
+  return resolveClaimsById(ids, now, hooks);
 }
 
 /**
@@ -305,11 +333,11 @@ export async function persistClaimMemories(claimId: string): Promise<string | un
 
   const write = { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };
   let blobId: string | undefined;
-  const { error } = await writeMemoriesDurable([write], async (item, result) => {
+  const { error, cause } = await writeMemoriesDurable([write], async (item, result) => {
     await logMemories([item], [{ id: result.id, blobId: result.blobId, namespace: item.namespace }]);
     blobId = result.blobId;
   });
-  if (error) throw new Error(`memory write stopped: ${error}`);
+  if (error) throw new Error(`memory write stopped: ${error}`, cause ? { cause } : undefined);
   blobId = blobId ?? (await blobForKey(write.idempotencyKey)) ?? undefined;
   if (blobId) {
     await db.update(schema.claims).set({ walrusBlobId: blobId }).where(eq(schema.claims.id, claimId));

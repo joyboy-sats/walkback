@@ -58,6 +58,11 @@ export type Env = z.infer<typeof schema>;
 
 let cached: Env | null = null;
 
+/** Drop the cached parse. Tests use this; production reads env once. */
+export function resetEnvForTests(): void {
+  cached = null;
+}
+
 export function env(): Env {
   if (cached) return cached;
   const parsed = schema.safeParse(process.env);
