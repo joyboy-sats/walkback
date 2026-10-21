@@ -243,9 +243,10 @@ The API does not need the Walrus or Tatum keys.
 | `TATUM_SUI_RPC_URL` | `https://sui-mainnet.gateway.tatum.io` |
 | `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` |
 | `AI_GATEWAY_API_KEY` | Claim extraction |
+| `EXTRACT_MODEL` | Optional. Gateway model id, not a secret. Default `deepseek/deepseek-v4.1-flash` (DeepSeek V4.1 Flash). The API and Vercel do not read it. |
 | `DEMO_MODE` | `live` |
 | `WORKER_POLL_MS` | Optional. Default `2000`. |
-| `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. |
+| `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. The pass enqueues only when a claim is pending and past its deadline, and it waits longer after a claim's resolve keeps throwing. |
 
 Seed is a one-off with the worker’s environment: `npm run seed`.
 

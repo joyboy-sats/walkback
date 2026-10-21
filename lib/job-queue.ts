@@ -7,8 +7,14 @@
  * Walrus client: a Vercel request must be able to enqueue without the
  * delegate key.
  */
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import { getDb, schema } from "./db";
+import {
+  attemptsFromResolveJob,
+  NOOP_RESOLVE_RETENTION_MS,
+  RESOLVE_ATTEMPT_LOOKBACK,
+  type ResolveAttemptRecord,
+} from "./resolve-schedule";
 
 export type JobKind = "ingest" | "rebuild" | "resolve" | "restore";
 export type JobStatus = "pending" | "running" | "done" | "failed";
@@ -228,6 +234,51 @@ export async function requeueStaleJobs(now = new Date(), staleMs = STALE_RUNNING
     await recordJobFailure(row.id, row.attempts, "worker stopped before the job finished", now);
   }
   return rows.length;
+}
+
+/**
+ * Delete finished periodic resolve jobs that checked nothing and threw
+ * nothing, once they are older than an hour. The predicate matches
+ * `isNoopResolveResult`: both `reports` and `errors` are empty arrays.
+ * Jobs that resolved a claim, or that recorded a throw, stay. The throw
+ * rows are the backoff history.
+ */
+export async function pruneNoopResolveJobs(
+  now = new Date(),
+  retentionMs = NOOP_RESOLVE_RETENTION_MS,
+): Promise<number> {
+  const db = getDb();
+  const cutoff = new Date(now.getTime() - retentionMs);
+  const rows = await db
+    .delete(schema.ingestJobs)
+    .where(
+      and(
+        eq(schema.ingestJobs.kind, "resolve"),
+        eq(schema.ingestJobs.status, "done"),
+        lt(schema.ingestJobs.finishedAt, cutoff),
+        sql`jsonb_typeof(${schema.ingestJobs.result}->'reports') = 'array'
+          AND jsonb_array_length(${schema.ingestJobs.result}->'reports') = 0
+          AND jsonb_typeof(${schema.ingestJobs.result}->'errors') = 'array'
+          AND jsonb_array_length(${schema.ingestJobs.result}->'errors') = 0`,
+      ),
+    )
+    .returning({ id: schema.ingestJobs.id });
+  return rows.length;
+}
+
+/** Recent finished resolve jobs, newest first, flattened to per-claim attempts. */
+export async function recentResolveAttempts(limit = RESOLVE_ATTEMPT_LOOKBACK): Promise<ResolveAttemptRecord[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      finishedAt: schema.ingestJobs.finishedAt,
+      result: schema.ingestJobs.result,
+    })
+    .from(schema.ingestJobs)
+    .where(and(eq(schema.ingestJobs.kind, "resolve"), eq(schema.ingestJobs.status, "done")))
+    .orderBy(desc(schema.ingestJobs.finishedAt))
+    .limit(limit);
+  return rows.flatMap((row) => attemptsFromResolveJob(row));
 }
 
 export async function touchJob(id: string, now = new Date()): Promise<void> {

@@ -219,34 +219,54 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
 }
 
 /**
- * Resolve every claim whose deadline has passed.
- *
- * Intended for a cron or a "Resolve all" button. Returns per-claim reports so
- * the UI can show partial progress rather than one opaque failure.
+ * Pending claims whose deadline has passed, oldest deadline first.
  */
-export async function resolveDueClaims(
-  now = new Date(),
-  limit = 25,
-): Promise<{ reports: ResolveReport[]; errors: Array<{ claimId: string; error: string }> }> {
+export async function listDueClaimIds(now = new Date(), limit = 25): Promise<string[]> {
   const db = getDb();
   const due = await db
     .select({ id: schema.claims.id })
     .from(schema.claims)
     .where(and(eq(schema.claims.status, "pending"), lte(schema.claims.deadline, now)))
+    .orderBy(schema.claims.deadline)
     .limit(limit);
+  return due.map((row) => row.id);
+}
 
+/**
+ * Resolve the given claims. A throw is recorded and the loop continues, so
+ * one dead claim does not drop the rest of the batch. The claim stays
+ * `pending` when this throws — the caller decides when to try again.
+ */
+export async function resolveClaimsById(
+  ids: readonly string[],
+  now = new Date(),
+): Promise<{ reports: ResolveReport[]; errors: Array<{ claimId: string; error: string }> }> {
   const reports: ResolveReport[] = [];
   const errors: Array<{ claimId: string; error: string }> = [];
 
-  for (const c of due) {
+  for (const id of ids) {
     try {
-      reports.push(await resolveClaim(c.id, now));
+      reports.push(await resolveClaim(id, now));
     } catch (err) {
-      errors.push({ claimId: c.id, error: err instanceof Error ? err.message : String(err) });
+      errors.push({ claimId: id, error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   return { reports, errors };
+}
+
+/**
+ * Resolve every claim whose deadline has passed.
+ *
+ * Intended for a cron or a "Resolve all" button. Returns per-claim reports so
+ * the UI can show partial progress rather than one opaque failure. This path
+ * does not apply the periodic backoff; the button means "check them now".
+ */
+export async function resolveDueClaims(
+  now = new Date(),
+  limit = 25,
+): Promise<{ reports: ResolveReport[]; errors: Array<{ claimId: string; error: string }> }> {
+  return resolveClaimsById(await listDueClaimIds(now, limit), now);
 }
 
 /**

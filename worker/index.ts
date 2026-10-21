@@ -17,10 +17,18 @@ import {
   HEARTBEAT_MS,
   markJobDone,
   MAX_ATTEMPTS,
+  pruneNoopResolveJobs,
+  recentResolveAttempts,
   recordJobFailure,
   requeueStaleJobs,
   touchJob,
 } from "../lib/job-queue";
+import {
+  decidePeriodicResolve,
+  DUE_CLAIM_SCAN_LIMIT,
+  PERIODIC_RESOLVE_LIMIT,
+} from "../lib/resolve-schedule";
+import { listDueClaimIds } from "../lib/resolve";
 import { boot } from "../backend/boot";
 import { dispatchJob } from "./dispatch";
 
@@ -58,12 +66,41 @@ function sleep(ms: number): Promise<void> {
 
 async function maybeEnqueueResolve(): Promise<void> {
   if (resolveEveryMs === 0) return;
-  if (await hasOpenJob("resolve")) {
-    console.log("[worker] resolve pass already queued");
+  const pruned = await pruneNoopResolveJobs();
+  if (pruned > 0) {
+    console.log(`[worker] pruned ${pruned} no-op resolve job${pruned === 1 ? "" : "s"}`);
+  }
+
+  const openJob = await hasOpenJob("resolve");
+  const now = new Date();
+  const dueIds = openJob ? [] : await listDueClaimIds(now, DUE_CLAIM_SCAN_LIMIT);
+  const attempts = openJob || dueIds.length === 0 ? [] : await recentResolveAttempts();
+  const decision = decidePeriodicResolve({
+    enabled: true,
+    openJob,
+    dueIds,
+    attempts,
+    now,
+    limit: PERIODIC_RESOLVE_LIMIT,
+  });
+
+  if (decision.action === "skip") {
+    if (decision.reason === "open") console.log("[worker] resolve pass already queued");
+    else if (decision.reason === "idle") console.log("[worker] no claim is pending past its deadline");
+    else if (decision.reason === "backoff") {
+      console.log(`[worker] ${dueIds.length} due claim(s) still in failure backoff`);
+    }
     return;
   }
-  const id = await enqueueJob("resolve", { due: true, limit: 10 });
-  console.log(`[worker] queued periodic resolve ${id}`);
+
+  const waiting = dueIds.length - decision.claimIds.length;
+  if (waiting > 0) console.log(`[worker] ${waiting} due claim(s) still in failure backoff`);
+  const id = await enqueueJob("resolve", {
+    due: true,
+    limit: decision.claimIds.length,
+    claimIds: decision.claimIds,
+  });
+  console.log(`[worker] queued periodic resolve ${id} for ${decision.claimIds.length} claim(s)`);
 }
 
 await boot();

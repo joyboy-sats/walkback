@@ -9,7 +9,8 @@ import type { IngestBody } from "../lib/ingest-body";
 import type { ClaimedJob } from "../lib/job-queue";
 import { restoreNamespace } from "../lib/memwal";
 import { rebuildProjection } from "../lib/projection-rebuild";
-import { resolveClaim, resolveDueClaims } from "../lib/resolve";
+import { planResolveJob } from "../lib/resolve-schedule";
+import { resolveClaim, resolveClaimsById, resolveDueClaims } from "../lib/resolve";
 import { NS, type Namespace } from "../lib/types";
 
 export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
@@ -37,9 +38,10 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
       });
     }
     case "resolve": {
-      const payload = job.payload as { claimId?: string; due?: boolean; limit?: number };
-      if (payload.claimId) return resolveClaim(payload.claimId);
-      return resolveDueClaims(new Date(), payload.limit ?? 10);
+      const plan = planResolveJob(job.payload);
+      if (plan.type === "one") return resolveClaim(plan.claimId);
+      if (plan.type === "ids") return resolveClaimsById(plan.claimIds);
+      return resolveDueClaims(new Date(), plan.limit);
     }
     case "restore": {
       const payload = job.payload as { namespace?: Namespace; limit?: number };
