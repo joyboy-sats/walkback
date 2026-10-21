@@ -11,6 +11,11 @@
  * Colour carries exactly one meaning: verdict state. Everything else is ink on
  * a surface. The accent is reserved for the one action on a page.
  *
+ * The accent is violet rather than the usual SaaS blue: it separates this from
+ * every other dark dashboard, sits in the same family as the Better Stack
+ * reference this borrows its structure from, and stays clear of the red/green
+ * verdict pair so an accent is never mistaken for a judgement.
+ *
  * Verdict colours were checked against this surface with the dataviz validator.
  * Red and green are indistinguishable under deuteranopia (ΔE 4.1), so a verdict
  * is never colour-alone: each one ships a glyph and a word.
@@ -29,8 +34,8 @@
   --color-ink-2: #a6a6b2;
   --color-ink-3: #6b6b78;
 
-  --color-accent: #3987e5;
-  --color-accent-dim: #1f4f8a;
+  --color-accent: #8f7bf0;
+  --color-accent-dim: #4a3f8f;
 
   /* Verdict states. Always paired with a glyph and a word. */
   --color-true: #0ca30c;
@@ -40,8 +45,8 @@
   /* Trust bands, taken from the same accent ramp so a score bar reads as one
      magnitude scale rather than a traffic light. */
   --color-band-low: #4a4a56;
-  --color-band-mid: #2f6fb8;
-  --color-band-high: #3987e5;
+  --color-band-mid: #6b5bc4;
+  --color-band-high: #8f7bf0;
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
