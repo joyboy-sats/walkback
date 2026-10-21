@@ -27,7 +27,7 @@ import { findPersistedKeys } from "./persisted-keys";
 import { writeMemoriesDurable, type MemoryWrite } from "./memwal";
 import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
-import { applyOutcome, computeScore, type ScoreSnapshot } from "./score";
+import { computeScore, replaceOutcome } from "./score";
 import { NS } from "./types";
 import type { ClaimParams, ClaimType, BalanceSnapshot } from "./types";
 
@@ -57,14 +57,30 @@ export interface ResolveBatch {
   stopped?: string;
 }
 
+export interface ResolveOptions {
+  /**
+   * Append a new resolution for a claim that already has one. The previous
+   * Walrus memory stays. Only a void is re-checked, unless `force` is set.
+   */
+  supersede?: boolean;
+  /** Re-check a true or false verdict too. Still appends; it does not edit. */
+  force?: boolean;
+}
+
 /**
  * Resolve one claim and fold the result into the source's trust.
  *
- * Idempotent by construction: a claim that is already resolved returns its
- * existing verdict without writing anything. Idempotency keys are derived from
- * the claim id, so even a concurrent double-call collapses at the relayer.
+ * The first resolution is idempotent: a claim that already has one returns
+ * it without writing. `supersede` appends a new revision (`resolution:{id}:rN`)
+ * and moves the projection to that verdict. The previous memory is left in
+ * place. A void that becomes true adds one hit, the same count the Wilson
+ * replay gets from keeping only the latest outcome.
  */
-export async function resolveClaim(claimId: string, now = new Date()): Promise<ResolveReport> {
+export async function resolveClaim(
+  claimId: string,
+  now = new Date(),
+  opts: ResolveOptions = {},
+): Promise<ResolveReport> {
   const db = getDb();
 
   const [row] = await db
@@ -84,9 +100,10 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
     .select()
     .from(schema.resolutions)
     .where(eq(schema.resolutions.claimId, claimId))
+    .orderBy(desc(schema.resolutions.resolvedAt))
     .limit(1);
 
-  if (existing) {
+  if (existing && !opts.supersede) {
     return {
       claimId,
       outcome: existing.outcome,
@@ -95,6 +112,17 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
       scoreAfter: source.score,
       blobs: {},
       skipped: "already resolved",
+    };
+  }
+  if (existing && existing.outcome !== "void" && !opts.force) {
+    return {
+      claimId,
+      outcome: existing.outcome,
+      reason: existing.reason,
+      scoreBefore: source.score,
+      scoreAfter: source.score,
+      blobs: {},
+      skipped: "already adjudicated",
     };
   }
 
@@ -114,8 +142,18 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
     ));
 
   // A void never moves the score, so it does not produce a score version.
+  // Replacing one removes its old contribution first, so a void that becomes
+  // true adds a single hit and a second pass over a true claim adds none.
   const before = computeScore(source.hits, source.misses);
-  const after = applyOutcome(source.hits, source.misses, verdict.outcome);
+  const after = replaceOutcome(
+    source.hits,
+    source.misses,
+    existing?.outcome ?? null,
+    verdict.outcome,
+  );
+  const revision = existing ? evidenceRevision(existing.evidence) + 1 : 1;
+  const resolvedAt = now.toISOString();
+  const evidence = resolutionEvidence(verdict.evidence, revision, resolvedAt);
 
   const writes: MemoryWrite[] = [];
 
@@ -127,9 +165,10 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
       quote: claim.quote,
       outcome: verdict.outcome,
       reason: verdict.reason,
-      evidence: verdict.evidence,
+      evidence,
     },
     { before, after },
+    { revision, resolvedAt },
   );
   writes.push({
     text: resolutionText.text,
@@ -139,7 +178,7 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
 
   let scoreText: { text: string; key: string } | null = null;
   let nextVersion = 0;
-  if (after.adjudicated !== before.adjudicated) {
+  if (after.hits !== before.hits || after.misses !== before.misses) {
     const [last] = await db
       .select({ version: schema.scoreVersions.version, score: schema.scoreVersions.score })
       .from(schema.scoreVersions)
@@ -183,44 +222,62 @@ export async function resolveClaim(claimId: string, now = new Date()): Promise<R
   const resolutionBlob = blobs.get(resolutionText.key) ?? (await blobForKey(resolutionText.key));
   const scoreBlob = scoreText ? (blobs.get(scoreText.key) ?? (await blobForKey(scoreText.key))) : undefined;
 
-  await db.insert(schema.resolutions).values({
-    claimId: claim.id,
-    outcome: verdict.outcome,
-    evidence: verdict.evidence as Record<string, unknown>,
-    reason: verdict.reason,
-    walrusBlobId: resolutionBlob ?? null,
-  });
+  // One commit: a retry must not observe a new verdict without the score
+  // that verdict implies, or a new score without the verdict.
+  await db.transaction(async (tx) => {
+    if (existing) {
+      await tx
+        .update(schema.resolutions)
+        .set({
+          outcome: verdict.outcome,
+          evidence,
+          reason: verdict.reason,
+          resolvedAt: now,
+          walrusBlobId: resolutionBlob ?? null,
+        })
+        .where(eq(schema.resolutions.claimId, claim.id));
+    } else {
+      await tx.insert(schema.resolutions).values({
+        claimId: claim.id,
+        outcome: verdict.outcome,
+        evidence,
+        reason: verdict.reason,
+        resolvedAt: now,
+        walrusBlobId: resolutionBlob ?? null,
+      });
+    }
 
-  await db
-    .update(schema.claims)
-    .set({
-      status: verdict.outcome === "void" ? "void" : "resolved",
-    })
-    .where(eq(schema.claims.id, claim.id));
-
-  if (scoreText) {
-    await db.insert(schema.scoreVersions).values({
-      sourceId: source.id,
-      version: nextVersion,
-      hits: after.hits,
-      misses: after.misses,
-      score: after.score,
-      hitRate: after.hitRate,
-      triggeredByClaimId: claim.id,
-      reason: `claim resolved ${verdict.outcome}`,
-      walrusBlobId: scoreBlob ?? null,
-    });
-
-    await db
-      .update(schema.sources)
+    await tx
+      .update(schema.claims)
       .set({
+        status: verdict.outcome === "void" ? "void" : "resolved",
+      })
+      .where(eq(schema.claims.id, claim.id));
+
+    if (scoreText) {
+      await tx.insert(schema.scoreVersions).values({
+        sourceId: source.id,
+        version: nextVersion,
         hits: after.hits,
         misses: after.misses,
         score: after.score,
-        muted: after.band === "muted",
-      })
-      .where(eq(schema.sources.id, source.id));
-  }
+        hitRate: after.hitRate,
+        triggeredByClaimId: claim.id,
+        reason: `claim resolved ${verdict.outcome}`,
+        walrusBlobId: scoreBlob ?? null,
+      });
+
+      await tx
+        .update(schema.sources)
+        .set({
+          hits: after.hits,
+          misses: after.misses,
+          score: after.score,
+          muted: after.band === "muted",
+        })
+        .where(eq(schema.sources.id, source.id));
+    }
+  });
 
   return {
     claimId,
@@ -258,6 +315,7 @@ export async function resolveClaimsById(
   ids: readonly string[],
   now = new Date(),
   hooks?: ResolveHooks,
+  opts: ResolveOptions = {},
 ): Promise<ResolveBatch> {
   const reports: ResolveReport[] = [];
   const errors: Array<{ claimId: string; error: string }> = [];
@@ -266,7 +324,7 @@ export async function resolveClaimsById(
     const started = Date.now();
     hooks?.onClaimStart?.(id);
     try {
-      const report = await resolveClaim(id, now);
+      const report = await resolveClaim(id, now, opts);
       hooks?.onClaimDone?.(report, Date.now() - started);
       reports.push(report);
     } catch (err) {
@@ -343,6 +401,24 @@ export async function persistClaimMemories(claimId: string): Promise<string | un
     await db.update(schema.claims).set({ walrusBlobId: blobId }).where(eq(schema.claims.id, claimId));
   }
   return blobId;
+}
+
+function evidenceRevision(evidence: unknown): number {
+  if (!evidence || typeof evidence !== "object") return 1;
+  const revision = (evidence as { revision?: unknown }).revision;
+  return typeof revision === "number" && Number.isInteger(revision) && revision > 0 ? revision : 1;
+}
+
+function resolutionEvidence(
+  evidence: unknown,
+  revision: number,
+  resolvedAt: string,
+): Record<string, unknown> {
+  const base =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence)
+      ? { ...(evidence as Record<string, unknown>) }
+      : { value: evidence ?? null };
+  return { ...base, revision, resolvedAt };
 }
 
 async function blobForKey(key: string): Promise<string | null> {

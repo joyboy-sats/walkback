@@ -643,3 +643,121 @@ describe("derived scores", () => {
     expect(deriveScoreVersions({ claims: [], resolutions: [] })).toEqual([]);
   });
 });
+
+describe("a later resolution replaces a void", () => {
+  const claimA = claimUuid(80);
+  const claimB = claimUuid(81);
+  const quote = "later resolution";
+  const extracted = {
+    quote,
+    claimType: "balance_threshold" as ClaimType,
+    params,
+    deadline: DEADLINE,
+    confidence: 0.9,
+  };
+  const claim = {
+    id: claimB,
+    sourceHandle: "alpha",
+    claimType: "balance_threshold" as ClaimType,
+    params,
+    deadline: DEADLINE,
+    confidence: 0.9,
+  };
+  const score = computeScore(0, 0);
+
+  const memories = [
+    memory(
+      NS.source,
+      sourceMemory({ id: SOURCE_A, handle: "alpha", platform: "x" }, { createdAt: WHEN }),
+      "blob-source-alpha",
+    ),
+    memory(
+      NS.claim,
+      claimMemory(
+        {
+          id: claimA,
+          sourceHandle: "alpha",
+          claimType: "balance_threshold",
+          params,
+          deadline: DEADLINE,
+          confidence: 0.9,
+        },
+        { ...extracted, quote: "earlier true" },
+        null,
+      ),
+      "blob-claim-a",
+    ),
+    memory(
+      NS.claim,
+      claimMemory(claim, extracted, null),
+      "blob-claim-b",
+    ),
+    memory(
+      NS.resolution,
+      resolutionMemory(
+        {
+          claimId: claimA,
+          sourceHandle: "alpha",
+          claimType: "balance_threshold",
+          quote: "earlier true",
+          outcome: "true",
+          reason: "checked",
+          evidence: {},
+        },
+        { before: score, after: computeScore(1, 0) },
+        { revision: 1, resolvedAt: "2026-10-20T07:00:00.000Z" },
+      ),
+      "blob-resolution-a",
+    ),
+    // The true revision is listed before the void, the order recall might return.
+    memory(
+      NS.resolution,
+      resolutionMemory(
+        {
+          claimId: claimB,
+          sourceHandle: "alpha",
+          claimType: "balance_threshold",
+          quote,
+          outcome: "true",
+          reason: "replaying the transfer",
+          evidence: { revision: 2 },
+        },
+        { before: computeScore(1, 0), after: computeScore(2, 0) },
+        { revision: 2, resolvedAt: "2026-10-21T16:00:00.000Z" },
+      ),
+      "blob-resolution-b-true",
+    ),
+    memory(
+      NS.resolution,
+      resolutionMemory(
+        {
+          claimId: claimB,
+          sourceHandle: "alpha",
+          claimType: "balance_threshold",
+          quote,
+          outcome: "void",
+          reason: "could not check",
+          evidence: { revision: 1 },
+        },
+        { before: computeScore(1, 0), after: computeScore(1, 0) },
+        { revision: 1, resolvedAt: "2026-10-20T08:00:00.000Z" },
+      ),
+      "blob-resolution-b-void",
+    ),
+  ];
+
+  const projection = projectMemories(shuffle(memories, 7));
+
+  it("keeps the later true and counts one hit for that claim", () => {
+    const claimRow = projection.claims.find((row) => row.id === claimB);
+    expect(claimRow?.status).toBe("resolved");
+    const resolution = projection.resolutions.find((row) => row.claimId === claimB);
+    expect(resolution?.outcome).toBe("true");
+    expect(resolution?.revision).toBe(2);
+    const source = projection.sources.find((row) => row.id === SOURCE_A);
+    expect(source?.hits).toBe(2);
+    expect(source?.misses).toBe(0);
+    expect(projection.scoreVersions.map((row) => row.triggeredByClaimId)).toEqual([claimA, claimB]);
+    expect(projection.skipped.some((row) => row.blobId === "blob-resolution-b-void")).toBe(true);
+  });
+});

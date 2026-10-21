@@ -6,6 +6,7 @@ import {
   applyOutcome,
   computeScore,
   hitRate,
+  replaceOutcome,
   trustBand,
   wilsonLowerBound,
 } from "./score";
@@ -119,5 +120,24 @@ describe("applyOutcome", () => {
   it("counts a hit and a miss, and nothing else", () => {
     expect(applyOutcome(4, 1, "true")).toEqual(computeScore(5, 1));
     expect(applyOutcome(4, 1, "false")).toEqual(computeScore(4, 2));
+  });
+});
+
+describe("replaceOutcome", () => {
+  it("turns a void into one hit and does not count the void", () => {
+    expect(replaceOutcome(9, 0, "void", "true")).toEqual(computeScore(10, 0));
+  });
+
+  it("leaves the score in place when a true claim is checked again", () => {
+    expect(replaceOutcome(9, 0, "true", "true")).toEqual(computeScore(9, 0));
+  });
+
+  it("swaps a hit for a miss when the latest verdict is false", () => {
+    expect(replaceOutcome(9, 0, "true", "false")).toEqual(computeScore(8, 1));
+  });
+
+  it("treats a first resolution the same as applyOutcome", () => {
+    expect(replaceOutcome(0, 0, null, "true")).toEqual(applyOutcome(0, 0, "true"));
+    expect(replaceOutcome(0, 0, null, "void")).toEqual(applyOutcome(0, 0, "void"));
   });
 });

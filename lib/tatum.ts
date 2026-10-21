@@ -11,8 +11,10 @@
  *   need so nothing downstream has to know the wire shape.
  * - There is NO historical balance query on Sui. `suix_getBalance` is
  *   current-state only. Anything about the past must go through
- *   `queryTransactionBlocks` with `showBalanceChanges`. This is the single
- *   most important constraint in the whole product.
+ *   `queryTransactionBlocks`, then `sui_multiGetTransactionBlocks` with
+ *   `showBalanceChanges` on the digests that have effects. Asking for
+ *   balance changes on the page itself fails the whole page when the
+ *   address index contains a digest the node cannot load.
  * - In replay mode every call is served from a fixture file and no network
  *   request is made. The demo has to survive a dead wifi.
  */
@@ -200,6 +202,175 @@ export interface TransactionBlock {
 }
 
 /**
+ * Page options for `suix_queryTransactionBlocks`.
+ *
+ * `showEffects` is enough to learn the timestamp and to see that a digest
+ * has effects. `showBalanceChanges` is intentionally absent: on Sui, one
+ * digest in the page with empty effects makes the node reject the entire
+ * page (`unable to derive balance/object changes because effect is empty`).
+ * Balance changes are loaded afterwards, per digest.
+ */
+export const REPLAY_PAGE_OPTIONS = { showEffects: true } as const;
+
+export interface RawBalanceChange {
+  owner?: { AddressOwner?: string } | string;
+  coinType?: string;
+  amount?: string | number;
+}
+
+/** One row of a `suix_queryTransactionBlocks` or `sui_multiGetTransactionBlocks` result. */
+export interface RawQueriedTransaction {
+  digest?: string;
+  timestampMs?: string | null;
+  effects?: unknown;
+  balanceChanges?: RawBalanceChange[] | null;
+}
+
+/** The node stringifies this as a Rust `ErrorObject` when a page mixes in a digest it cannot load. */
+export function isEmptyEffectError(message: string): boolean {
+  return /effect is empty/i.test(message);
+}
+
+export function parseBalanceChanges(
+  raw: RawBalanceChange[] | null | undefined,
+): BalanceChange[] {
+  return (raw ?? []).map((change) => ({
+    address: addressOfOwner(change.owner),
+    coinType: change.coinType ?? "",
+    amount: String(change.amount ?? "0"),
+  }));
+}
+
+function addressOfOwner(owner: RawBalanceChange["owner"]): string {
+  if (!owner) return "";
+  if (typeof owner === "string") return owner;
+  return owner.AddressOwner ?? "";
+}
+
+/**
+ * The address index sometimes returns a digest the node does not have.
+ * `sui_getTransactionBlock` answers "Could not find the referenced
+ * transaction", and the row has no timestamp and no effects. It is not a
+ * transfer we can place in a window.
+ */
+export function isPhantomTransaction(tx: RawQueriedTransaction): boolean {
+  const hasTimestamp = tx.timestampMs != null && tx.timestampMs !== "";
+  return !hasTimestamp && (tx.effects == null);
+}
+
+export function parseQueriedTransaction(tx: RawQueriedTransaction): TransactionBlock | null {
+  if (!tx.digest || isPhantomTransaction(tx)) return null;
+  const parsed = tx.timestampMs ? new Date(Number(tx.timestampMs)) : null;
+  const timestamp =
+    parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined;
+  return {
+    digest: tx.digest,
+    ...(timestamp ? { timestamp } : {}),
+    balanceChanges: parseBalanceChanges(tx.balanceChanges),
+  };
+}
+
+export function parseTransactionPage(raw: {
+  data?: RawQueriedTransaction[] | null;
+  nextCursor?: string | null;
+  hasNextPage?: boolean;
+}): {
+  blocks: TransactionBlock[];
+  nextCursor: string | null;
+  hasNextPage: boolean;
+  droppedPhantoms: number;
+} {
+  const blocks: TransactionBlock[] = [];
+  let droppedPhantoms = 0;
+  for (const tx of raw.data ?? []) {
+    const parsed = parseQueriedTransaction(tx);
+    if (parsed) {
+      blocks.push(parsed);
+      continue;
+    }
+    if (tx?.digest && isPhantomTransaction(tx)) droppedPhantoms += 1;
+  }
+  return {
+    blocks,
+    nextCursor: raw.nextCursor ?? null,
+    hasNextPage: Boolean(raw.hasNextPage),
+    droppedPhantoms,
+  };
+}
+
+/**
+ * Load balance changes for specific digests.
+ *
+ * A batch that contains one unloadable digest fails as a whole. Split until
+ * the bad digest is alone, then record it as unreadable and keep the rest.
+ * Any other error still throws: a dead gateway is not a zero transfer.
+ */
+export async function loadBalanceChanges(
+  digests: readonly string[],
+  fetchBatch: (digests: readonly string[]) => Promise<RawQueriedTransaction[]>,
+): Promise<{ changes: Map<string, BalanceChange[]>; unreadable: string[] }> {
+  const changes = new Map<string, BalanceChange[]>();
+  const unreadable: string[] = [];
+
+  async function rec(batch: readonly string[]): Promise<void> {
+    if (batch.length === 0) return;
+    try {
+      const txs = await fetchBatch(batch);
+      const byDigest = new Map(
+        txs.filter((tx) => tx.digest).map((tx) => [tx.digest as string, tx]),
+      );
+      for (const digest of batch) {
+        const tx = byDigest.get(digest);
+        if (!tx || isPhantomTransaction(tx)) {
+          unreadable.push(digest);
+          continue;
+        }
+        changes.set(digest, parseBalanceChanges(tx.balanceChanges));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isEmptyEffectError(message)) throw err;
+      if (batch.length === 1) {
+        unreadable.push(batch[0]!);
+        return;
+      }
+      const mid = Math.floor(batch.length / 2);
+      await rec(batch.slice(0, mid));
+      await rec(batch.slice(mid));
+    }
+  }
+
+  const chunk = 20;
+  for (let i = 0; i < digests.length; i += chunk) {
+    await rec(digests.slice(i, i + chunk));
+  }
+  return { changes, unreadable };
+}
+
+/** Net of one coin for the blocks whose timestamps sit in `[since, until)`. */
+export function sumBalanceChanges(
+  blocks: readonly TransactionBlock[],
+  address: string,
+  coinType: string,
+  sinceIso: string,
+  untilIso: string,
+): { net: bigint; sampledBlocks: number } {
+  let net = 0n;
+  let sampledBlocks = 0;
+  for (const tx of blocks) {
+    if (!tx.timestamp) continue;
+    if (tx.timestamp < sinceIso || tx.timestamp >= untilIso) continue;
+    sampledBlocks += 1;
+    for (const change of tx.balanceChanges) {
+      if (change.coinType !== coinType) continue;
+      if (change.address !== address) continue;
+      net += BigInt(change.amount);
+    }
+  }
+  return { net, sampledBlocks };
+}
+
+/**
  * Newest-first page of transaction blocks for an address.
  *
  * This is the only way to learn about the past. `suix_queryTransactionBlocks`
@@ -219,59 +390,46 @@ export async function queryTransactionBlocks(
      */
     filter?: "FromAddress" | "ToAddress";
   } = {},
-): Promise<{ blocks: TransactionBlock[]; nextCursor: string | null; hasNextPage: boolean }> {
+): Promise<{
+  blocks: TransactionBlock[];
+  nextCursor: string | null;
+  hasNextPage: boolean;
+  droppedPhantoms: number;
+}> {
   assertAddress(address);
   const { limit = 50, cursor = null, untilIso, maxPages = 4, filter = "FromAddress" } = opts;
 
   const blocks: TransactionBlock[] = [];
   let pageCursor = cursor;
   let hasNextPage = false;
+  let droppedPhantoms = 0;
 
   for (let page = 0; page < maxPages; page++) {
     const res = await rpc<{
-      data?: Array<{
-        digest: string;
-        timestampMs?: string;
-        balanceChanges?: Array<{
-          owner?: { AddressOwner?: string };
-          coinType?: string;
-          amount?: string;
-        }>;
-      }>;
+      data?: RawQueriedTransaction[];
       nextCursor?: string | null;
       hasNextPage?: boolean;
     }>("suix_queryTransactionBlocks", [
-      { filter: { [filter]: address }, options: { showBalanceChanges: true } },
+      { filter: { [filter]: address }, options: REPLAY_PAGE_OPTIONS },
       pageCursor,
       limit,
       true,
     ]);
 
-    const data = res.data ?? [];
-    for (const tx of data) {
-      const ts = tx.timestampMs ? new Date(Number(tx.timestampMs)).toISOString() : undefined;
-      blocks.push({
-        digest: tx.digest,
-        ...(ts ? { timestamp: ts } : {}),
-        balanceChanges: (tx.balanceChanges ?? []).map((c) => ({
-          address: c.owner?.AddressOwner ?? "",
-          coinType: c.coinType ?? "",
-          amount: String(c.amount ?? "0"),
-        })),
-      });
-    }
-
-    pageCursor = res.nextCursor ?? null;
-    hasNextPage = Boolean(res.hasNextPage);
+    const parsed = parseTransactionPage(res);
+    blocks.push(...parsed.blocks);
+    droppedPhantoms += parsed.droppedPhantoms;
+    pageCursor = parsed.nextCursor;
+    hasNextPage = parsed.hasNextPage;
 
     if (!hasNextPage) break;
     if (untilIso) {
-      const oldest = blocks[blocks.length - 1]?.timestamp;
+      const oldest = oldestTimestamp(parsed.blocks);
       if (oldest && oldest < untilIso) break;
     }
   }
 
-  return { blocks, nextCursor: pageCursor, hasNextPage };
+  return { blocks, nextCursor: pageCursor, hasNextPage, droppedPhantoms };
 }
 
 /**
@@ -334,7 +492,17 @@ export async function netChangeInWindow(
   sinceIso: string,
   untilIso: string,
   maxPages = 6,
-): Promise<{ net: string; sampledBlocks: number; truncated: boolean }> {
+): Promise<{
+  net: string;
+  sampledBlocks: number;
+  truncated: boolean;
+  /** Digests inside the window whose balance changes could not be derived. */
+  unreadableDigests: string[];
+  /** Index rows with no timestamp and no effects. They are not transfers. */
+  droppedPhantoms: number;
+  /** Digests whose timestamps sit in the window. */
+  digests: string[];
+}> {
   const [sent, received] = await Promise.all([
     queryTransactionBlocks(address, { untilIso: sinceIso, maxPages, filter: "FromAddress" }),
     queryTransactionBlocks(address, { untilIso: sinceIso, maxPages, filter: "ToAddress" }),
@@ -347,27 +515,43 @@ export async function netChangeInWindow(
     sinceIso,
   );
 
-  let net = 0n;
-  let counted = 0;
-  for (const tx of blocks) {
-    if (!tx.timestamp) continue;
-    if (tx.timestamp < sinceIso) continue;
-    if (tx.timestamp >= untilIso) continue;
-    counted++;
-    for (const c of tx.balanceChanges) {
-      if (c.coinType !== coinType) continue;
-      if (c.address !== address) continue;
-      net += BigInt(c.amount);
-    }
-  }
+  const inWindow = blocks.filter(
+    (tx) => tx.timestamp && tx.timestamp >= sinceIso && tx.timestamp < untilIso,
+  );
+  const loaded = await loadBalanceChanges(
+    inWindow.map((tx) => tx.digest),
+    fetchBalanceChanges,
+  );
+  const readable = inWindow.map((tx) => ({
+    ...tx,
+    balanceChanges: loaded.changes.get(tx.digest) ?? [],
+  }));
+  const { net, sampledBlocks } = sumBalanceChanges(
+    readable.filter((tx) => !loaded.unreadable.includes(tx.digest)),
+    address,
+    coinType,
+    sinceIso,
+    untilIso,
+  );
 
   return {
     net: net.toString(),
-    sampledBlocks: counted,
+    sampledBlocks,
     // Page cap reached while more history inside the window may exist.
     // Callers must void rather than guess.
     truncated,
+    unreadableDigests: loaded.unreadable,
+    droppedPhantoms: sent.droppedPhantoms + received.droppedPhantoms,
+    digests: inWindow.map((tx) => tx.digest),
   };
+}
+
+async function fetchBalanceChanges(digests: readonly string[]): Promise<RawQueriedTransaction[]> {
+  if (digests.length === 0) return [];
+  return rpc<RawQueriedTransaction[]>("sui_multiGetTransactionBlocks", [
+    [...digests],
+    { showBalanceChanges: true },
+  ]);
 }
 
 /** One rate attempt. 404 and a null value are answers, not failures. */

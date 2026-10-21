@@ -109,25 +109,28 @@ export function isNoopResolveResult(result: unknown): boolean {
 }
 
 export type ResolvePlan =
-  | { type: "one"; claimId: string }
-  | { type: "ids"; claimIds: string[] }
+  | { type: "one"; claimId: string; supersede: boolean; force: boolean }
+  | { type: "ids"; claimIds: string[]; supersede: boolean; force: boolean }
   | { type: "due"; limit: number };
 
 /**
  * `claimId` is a manual single-claim resolve. `claimIds` is the periodic
- * pass (already filtered). Anything else is "whatever is due", which is the
- * manual resolve-all button and does not apply backoff.
+ * pass (already filtered) or an explicit re-resolve list. Anything else is
+ * "whatever is due", which is the manual resolve-all button and does not
+ * apply backoff. `supersede` is never implied by a due pass.
  */
 export function planResolveJob(payload: Record<string, unknown>): ResolvePlan {
+  const supersede = payload.supersede === true;
+  const force = payload.force === true;
   if (typeof payload.claimId === "string" && payload.claimId.length > 0) {
-    return { type: "one", claimId: payload.claimId };
+    return { type: "one", claimId: payload.claimId, supersede, force };
   }
   if (Array.isArray(payload.claimIds)) {
     const limit = positiveInt(payload.limit, PERIODIC_RESOLVE_LIMIT);
     const claimIds = payload.claimIds
       .filter((id): id is string => typeof id === "string" && id.length > 0)
       .slice(0, limit);
-    return { type: "ids", claimIds };
+    return { type: "ids", claimIds, supersede, force };
   }
   return { type: "due", limit: positiveInt(payload.limit, PERIODIC_RESOLVE_LIMIT) };
 }

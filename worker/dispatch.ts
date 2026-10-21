@@ -39,8 +39,18 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
     }
     case "resolve": {
       const plan = planResolveJob(job.payload);
-      if (plan.type === "one") return resolveClaim(plan.claimId);
-      if (plan.type === "ids") return resolveClaimsById(plan.claimIds);
+      if (plan.type === "one") {
+        return resolveClaim(plan.claimId, new Date(), {
+          supersede: plan.supersede,
+          force: plan.force,
+        });
+      }
+      if (plan.type === "ids") {
+        return resolveClaimsById(plan.claimIds, new Date(), undefined, {
+          supersede: plan.supersede,
+          force: plan.force,
+        });
+      }
       return resolveDueClaims(new Date(), plan.limit);
     }
     case "restore": {

@@ -1,0 +1,26 @@
+{
+  "digest": "4iUpYAtVSdHcPRRPJVVt3Gr5mZM3p3DHE2aPeWPg2eAJ",
+  "timestampMs": "1792476778616",
+  "checkpoint": "336020171",
+  "balanceChanges": [
+    {
+      "owner": {
+        "AddressOwner": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad"
+      },
+      "coinType": "0x2::sui::SUI",
+      "amount": "-1965693001088099"
+    },
+    {
+      "owner": {
+        "AddressOwner": "0x7ab9a6a7109dcb9cb357a109f32dfcc78a7aa2d6029084eb924d95133fc71cec"
+      },
+      "coinType": "0x2::sui::SUI",
+      "amount": "1965693000000000"
+    }
+  ],
+  "_source": {
+    "method": "sui_multiGetTransactionBlocks",
+    "node": "https://sui.api.onfinality.io/public",
+    "note": "Live balanceChanges for one digest. A page that also contains an effect-less digest cannot request this field."
+  }
+}

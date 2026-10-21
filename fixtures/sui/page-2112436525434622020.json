@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "digest": "4iUpYAtVSdHcPRRPJVVt3Gr5mZM3p3DHE2aPeWPg2eAJ",
+      "timestampMs": "1792476778616",
+      "checkpoint": "336020171",
+      "effects": {
+        "status": {
+          "status": "success"
+        }
+      }
+    },
+    {
+      "digest": "Cedo4y7m6HmcAxAFCLr2Uv4iZsWDfns7eAZGq3xkU5UY",
+      "timestampMs": null,
+      "checkpoint": null,
+      "effects": null
+    },
+    {
+      "digest": "8woyHjCshggxJ9byoUFGKYEVe5MZ2qze7LQBdX7xXkz5",
+      "timestampMs": "1790666828469",
+      "checkpoint": "328195085",
+      "effects": {
+        "status": {
+          "status": "success"
+        }
+      }
+    }
+  ],
+  "nextCursor": "7v6jp7G3XKJcEd48RbtAVfNQexs2MR9Xn6UHCgEnLSu7",
+  "hasNextPage": false,
+  "_source": {
+    "method": "suix_queryTransactionBlocks",
+    "filter": "FromAddress",
+    "address": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad",
+    "node": "https://sui.api.onfinality.io/public",
+    "note": "Subset of a live page. effects bodies are reduced to status; the parser only checks presence. Digests, timestamps, cursor and hasNextPage are from the node."
+  }
+}
