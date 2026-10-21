@@ -21,6 +21,7 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 
 import { MemWal } from "@mysten-incubation/memwal";
+import { finishScript } from "../lib/script-exit";
 
 const NS = "walkback.smoke";
 const MARK = `walkback-smoke-${Date.now()}`;
@@ -70,7 +71,7 @@ async function main() {
     console.log(`write_ready    ${health.write_ready ?? "(not reported)"}`);
     if (health.write_ready === false) {
       console.error("\n✗ relayer says writes are not ready — stop here.");
-      process.exit(1);
+      return 1;
     }
 
     section("2. delegate key");
@@ -131,7 +132,7 @@ async function main() {
       console.error("\n✗ wrote successfully but recall never returned it.");
       console.error("  the write is on mainnet, so this is an index/visibility issue,");
       console.error("  not a credential issue. try raising the sleep or re-running.");
-      process.exit(2);
+      return 2;
     }
     console.log(`distance       ${hit.distance.toFixed(4)}`);
     console.log(`text           ${hit.text.slice(0, 80)}…`);
@@ -171,6 +172,7 @@ async function main() {
     console.log(`  SUI address       (from memory.walrus.xyz account page)\n`);
     console.log(`Write cost: ${(writeMs / 1000).toFixed(1)}s for one memory.`);
     console.log(`Plan your seed batch against the 30 points/minute delegate limit.\n`);
+    return 0;
   } finally {
     memwal.destroy();
   }
@@ -180,15 +182,17 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-main().catch((e) => {
-  console.error("\n✗ smoke failed\n");
-  console.error(e instanceof Error ? `${e.name}: ${e.message}` : e);
-  console.error(
-    "\nchecklist, in this order:\n" +
-      "  1. private key is Ed25519 and registered onchain via addDelegateKey\n" +
-      "  2. accountId matches the account that key was registered under\n" +
-      "  3. serverUrl is relayer.memory.walrus.xyz, not relayer-staging\n" +
-      "  4. node >= 20\n",
-  );
-  process.exit(1);
-});
+main()
+  .then((code) => finishScript(code))
+  .catch((e) => {
+    console.error("\n✗ smoke failed\n");
+    console.error(e instanceof Error ? `${e.name}: ${e.message}` : e);
+    console.error(
+      "\nchecklist, in this order:\n" +
+        "  1. private key is Ed25519 and registered onchain via addDelegateKey\n" +
+        "  2. accountId matches the account that key was registered under\n" +
+        "  3. serverUrl is relayer.memory.walrus.xyz, not relayer-staging\n" +
+        "  4. node >= 20\n",
+    );
+    return finishScript(1);
+  });

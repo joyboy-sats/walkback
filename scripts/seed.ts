@@ -22,6 +22,7 @@
 import "dotenv/config";
 import { config } from "dotenv";
 import { readFile } from "node:fs/promises";
+import { finishScript } from "../lib/script-exit";
 config({ path: ".env.local" });
 
 if (!process.env.DATABASE_URL?.trim()) {
@@ -59,7 +60,6 @@ try {
   }
 }
 
-// `rememberAndWait` and the Sui client can leave a socket open after the
-// deadline aborts it. Closing the pool is not enough for the event loop to
-// drain. Exit so a timed-out seed does not sit in the container.
-process.exit(code);
+// finishSeed closes the pool and the MemWal client. A socket those calls
+// leave behind used to keep the process up; finishScript exits anyway.
+await finishScript(code);
