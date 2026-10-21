@@ -81,7 +81,7 @@ export function claimMemory(
   },
   extracted: ExtractedClaim,
   snapshot: BalanceSnapshot | null,
-  opts?: { synthetic?: boolean; externalId?: string },
+  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string },
 ): { text: string; key: string } {
   const snapLine = snapshot
     ? `At ingest, ${snapshot.address} held ${snapshot.balance} base units of ` +
@@ -94,6 +94,7 @@ export function claimMemory(
   const syntheticLine = opts?.synthetic
     ? `SYNTHETIC demo fallback — this is not a real post and must not be counted as evidence. `
     : "";
+  const sourceLine = opts?.sourceUrl ? `Original post: ${opts.sourceUrl}. ` : "";
 
   return {
     key: `claim:${claim.id}`,
@@ -101,6 +102,7 @@ export function claimMemory(
       `CLAIM from ${claim.sourceHandle}, due ${claim.deadline.slice(0, 10)}: ` +
       `"${clip(extracted.quote)}"\n\n` +
       `${syntheticLine}` +
+      `${sourceLine}` +
       `Recorded as a ${claim.claimType} claim with ${claim.confidence.toFixed(2)} ` +
       `extraction confidence. ${snapLine}\n\n` +
       payload({
@@ -115,6 +117,7 @@ export function claimMemory(
         snapshot,
         synthetic: opts?.synthetic === true,
         ...(opts?.externalId ? { external_id: opts.externalId } : {}),
+        ...(opts?.sourceUrl ? { source_url: opts.sourceUrl } : {}),
       }),
   };
 }

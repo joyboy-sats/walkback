@@ -7,8 +7,8 @@
  * means the idempotency rule can be tested without credentials.
  *
  * Real posts are the dataset. A post with `synthetic: true` is a demo
- * fallback and is counted separately. The file committed in the repo is
- * placeholders only; the script warns when those are not a minority.
+ * fallback and is counted separately. The file committed in the repo is the
+ * real set; the script warns when synthetic posts are not a minority.
  */
 import { z } from "zod";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
@@ -60,6 +60,8 @@ export const seedPostSchema = z.object({
     .regex(/^0x[0-9a-fA-F]{1,64}$/)
     .optional(),
   text: z.string().min(1).max(20_000),
+  /** Permalink of the original post. The feed links here. */
+  source_url: z.string().url().optional(),
   /**
    * Receipt frozen when the post was collected. Present so a historical
    * `balance_change_since_ingest` does not need a live balance read — Sui

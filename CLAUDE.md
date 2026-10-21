@@ -64,21 +64,24 @@ Hackathon: Walrus x Tatum "Total Recall". Deadline 2026-11-10 17:00 UTC
   `balance_change_since_ingest` exists and why ingest stores a `snapshot`.
   Anything about the past must use `suix_queryTransactionBlocks` with
   `showBalanceChanges`.
-- The rate endpoint (`/v4/data/rate/symbol`) costs 20 credits/call and its
-  support for `symbol=SUI` is **unverified** — it needs an API key. Verify
-  before shipping `price_threshold`; if unsupported, disable the claim type in
-  config rather than leaving it half-working.
+- The rate endpoint (`/v4/data/rate/symbol`) costs 20 credits/call. `getRate`
+  in `lib/tatum.ts` is the only price path (`symbol` + `basePair`, header
+  `x-api-key`). There is no CoinGecko client. Support for `symbol=SUI` is
+  **unverified** — it needs an API key. A 404 or a null value resolves the
+  claim `void` and does not move the score. The seeded price claims are all
+  SUI/USD.
 
 ## Architecture
 
 ```
-app/                    Next.js App Router — three screens, no more
+app/                    Next.js App Router — the UI. Vercel hosts only this.
   page.tsx              Feed: claims ranked by source trust
   sources/[id]/         Score timeline + evidence chain
   memory/               Raw memory log + restore button
-  api/ingest            paste text -> extract -> snapshot -> store -> memory
-  api/resolve           adjudicate due claims
-  api/restore           rebuild projection from Walrus
+  ingest/               Paste a post. Enqueues a job. Does not write Walrus.
+
+server/index.ts         Coolify API. Reads and job enqueue.
+worker/index.ts         Claims jobs, adjudicates, writes Walrus memories.
 
 lib/
   env.ts                validated env, client-bundle guard
@@ -96,8 +99,13 @@ lib/
 scripts/
   smoke.ts              verifies mainnet credentials end to end
   timing.ts             measures write latency
-  seed.ts               backfill historical claims (to be written)
+  seed.ts               backfill from data/claims.json (real posts)
+  list-memories.ts      count live memories on the delegate
 ```
+
+Postgres is the Coolify internal database. Migrations in `drizzle/` apply on
+API and worker boot, and via `npm run db:migrate`. Vercel receives only
+`NEXT_PUBLIC_API_URL`.
 
 ### Two layers, different jobs
 

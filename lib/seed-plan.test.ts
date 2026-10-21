@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { claimMemory } from "./memory-text";
+import { exclusionVerdict } from "./scoring-exclusion";
 import {
   chunk,
   formatSeedSummary,
@@ -13,18 +14,66 @@ import {
 } from "./seed-plan";
 
 const file = parseClaimsFile(JSON.parse(readFileSync("data/claims.json", "utf8")));
+const AS_OF = "2026-10-21T00:00:00.000Z";
 
 describe("data/claims.json", () => {
-  it("is a synthetic placeholder file, including a tx_replay and a recorded snapshot", () => {
-    expect(file.posts.length).toBeGreaterThan(0);
-    expect(file.posts.every(isSynthetic)).toBe(true);
-    const replay = file.posts.find((p) => p.claims?.some((c) => c.claim_type === "tx_replay"));
-    expect(replay).toBeDefined();
-    const recorded = file.posts.find((p) => p.snapshot && p.snapshot.balance);
-    expect(recorded?.snapshot && "balance" in recorded.snapshot && recorded.snapshot.balance).toBeTruthy();
+  const claims = file.posts.flatMap((post) =>
+    (post.claims ?? []).map((claim) => ({ post, claim })),
+  );
+
+  it("is the real set: 17 posts, 17 claims, no synthetic rows", () => {
+    expect(file.posts).toHaveLength(17);
+    expect(claims).toHaveLength(17);
+    expect(file.posts.filter(isSynthetic)).toHaveLength(0);
+    expect(claims.filter(({ claim }) => claim.claim_type === "tx_replay")).toHaveLength(11);
+    expect(claims.filter(({ claim }) => claim.claim_type === "price_threshold")).toHaveLength(6);
+    expect(claims.filter(({ claim }) => claim.claim_type === "balance_threshold")).toHaveLength(0);
+    expect(new Set(file.posts.map((p) => p.handle)).size).toBe(7);
+    expect(file.posts.some((p) => p.handle.toLowerCase().includes("mysqlsui"))).toBe(false);
     for (const post of file.posts) {
-      expect(post.text.toLowerCase()).toContain("placeholder");
+      expect(post.source_url?.startsWith("https://x.com/")).toBe(true);
+      expect(post.text.toLowerCase()).not.toContain("placeholder");
     }
+  });
+
+  it("passes the seed checks and would not be voided as a placeholder", () => {
+    const dueReplay: string[] = [];
+    const pendingPrice: string[] = [];
+    for (const { post, claim } of claims) {
+      expect(post.text.includes(claim.quote)).toBe(true);
+      expect(claim.quote.length).toBeLessThanOrEqual(200);
+      expect(claim.confidence).toBeGreaterThanOrEqual(0.6);
+      const materialized = materializeClaims(post);
+      expect(materialized?.length).toBe(1);
+      const stored = materialized![0]!;
+      expect(exclusionVerdict({ synthetic: false, params: stored.params })).toBeNull();
+      if (claim.claim_type === "tx_replay") {
+        const since = String(claim.params.since);
+        const until = String(claim.params.until);
+        expect(Date.parse(since)).toBeLessThan(Date.parse(until));
+        expect(Date.parse(claim.deadline)).toBeGreaterThanOrEqual(Date.parse(until));
+        expect(post.snapshot).toBeNull();
+        expect(post.sui_address).toBe(claim.params.address);
+        if (claim.deadline <= AS_OF) dueReplay.push(post.id);
+      }
+      if (claim.claim_type === "price_threshold") {
+        expect(String(claim.params.symbol).toUpperCase()).toBe("SUI");
+        expect(String(claim.params.quote ?? "USD").toUpperCase()).toBe("USD");
+        expect(claim.deadline > AS_OF).toBe(true);
+        expect(post.sui_address).toBeUndefined();
+        pendingPrice.push(post.id);
+      }
+    }
+    expect(dueReplay).toHaveLength(11);
+    expect(pendingPrice).toHaveLength(6);
+    expect(pendingPrice.every((id) => claims.find((c) => c.post.id === id)!.claim.deadline >= "2026-10-30")).toBe(
+      true,
+    );
+  });
+
+  it("omits the replay whose quote names a different address than the one stored", () => {
+    expect(file.posts.some((p) => p.id === "x-onchainwatch-2110064092434104572")).toBe(false);
+    expect(file.posts.some((p) => p.text.includes("0x1ae70480"))).toBe(false);
   });
 });
 
@@ -113,16 +162,18 @@ describe("plannedClaimIdentity", () => {
 
 describe("materializeClaims", () => {
   it("keeps an explicit tx_replay, including the window", () => {
-    const post = file.posts.find((p) => p.id === "placeholder-gamma-replay");
+    const post = file.posts.find((p) => p.id === "x-onchainwatch-2112521583134667061");
     expect(post).toBeDefined();
     const claims = materializeClaims(post!);
     expect(claims).toHaveLength(1);
     const claim = claims![0]!;
     expect(claim.claimType).toBe("tx_replay");
     expect(claim.params).toMatchObject({
-      since: "2026-09-01T00:00:00.000Z",
-      until: "2026-09-15T00:00:00.000Z",
+      address: "0xbaae485e643532b4597f5ef9018103191452cc5c49ad7a3f5c59d9272c75ba69",
+      since: "2026-10-20T10:51:00.000Z",
+      until: "2026-10-20T12:31:00.000Z",
       direction: "gte",
+      amount: "2075237000000000",
     });
   });
 
@@ -207,5 +258,28 @@ describe("synthetic memory text", () => {
     const payload = JSON.parse(json!) as { synthetic: boolean; external_id: string };
     expect(payload.synthetic).toBe(true);
     expect(payload.external_id).toBe(identity.externalId);
+  });
+
+  it("records the original post url in the fenced JSON", () => {
+    const post = file.posts[0]!;
+    const claim = materializeClaims(post)![0]!;
+    const mem = claimMemory(
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        sourceHandle: post.handle,
+        claimType: claim.claimType,
+        params: claim.params,
+        deadline: claim.deadline,
+        confidence: claim.confidence,
+      },
+      claim,
+      null,
+      { sourceUrl: post.source_url },
+    );
+    expect(mem.text).toContain(post.source_url!);
+    const json = mem.text.match(/```json\s*([\s\S]*?)```/)?.[1];
+    const payload = JSON.parse(json!) as { source_url: string; synthetic: boolean };
+    expect(payload.source_url).toBe(post.source_url);
+    expect(payload.synthetic).toBe(false);
   });
 });

@@ -18,6 +18,7 @@ interface FeedRow {
     status: string;
     deadline: string;
     synthetic: boolean;
+    sourceUrl: string | null;
     walrusBlobId: string | null;
   };
   source: {
@@ -119,6 +120,11 @@ export default async function FeedPage() {
                     <span className="border border-[var(--line)] rounded px-1.5 py-0.5 text-[var(--void)]">
                       synthetic
                     </span>
+                  )}
+                  {claim.sourceUrl?.startsWith("https://") && (
+                    <a href={claim.sourceUrl} className="hover:underline" target="_blank" rel="noreferrer">
+                      original post
+                    </a>
                   )}
                   <span className={claim.status === "resolved" ? "text-[var(--good)]" : ""}>
                     {claim.status}

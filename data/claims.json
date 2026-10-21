@@ -1,110 +1,421 @@
 {
-  "note": "Every post in this file is a synthetic placeholder. Replace them with real posts collected during the hackathon. A real post omits synthetic (or sets it to false). Real posts have to be the majority before the demo. See the README section 'Adding claims'.",
+  "note": "Real X posts collected 2026-10-20 (SGT). Not synthetic. Text is the post text. Windows and deadlines on tx_replay were chosen when the posts were collected; the posts themselves do not state them. @mysqlsui and both balance_threshold claims (deadline 2026-10-22T00:00:00.000Z, 08:00 SGT) are omitted. x-onchainwatch-2110064092434104572 is omitted: the quote names From 0x1ae70480 but the stored address is different, and that was its only claim. Ids are lowercase slugs of the candidate ids, with underscores removed, so they match the seed validator.",
   "posts": [
     {
-      "id": "placeholder-alpha-balance",
-      "synthetic": true,
-      "handle": "placeholder_alpha",
+      "id": "x-onchainwatch-2112521583134667061",
+      "handle": "_OnChainWatch",
       "platform": "x",
-      "published_at": "2026-10-01T12:00:00.000Z",
-      "sui_address": "0x1111111111111111111111111111111111111111111111111111111111111111",
-      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. I hold at least 1 SUI.",
-      "snapshot": {
-        "address": "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "asset": "0x2::sui::SUI",
-        "balance": "1000000000",
-        "asOf": "2026-10-01T12:00:00.000Z"
-      },
+      "published_at": "2026-10-20T12:29:28.000Z",
+      "sui_address": "0xbaae485e643532b4597f5ef9018103191452cc5c49ad7a3f5c59d9272c75ba69",
+      "text": "\ud83d\udea8 SUI Whale Alert \ud83d\udc0b\n\n\ud83d\udcb0 2,075,237 $SUI (\u2248 $2,057,432)\n\n\ud83d\udce4 From: 0x6edd3be9\u2026\n\ud83d\udce5 To: 0xbaae485e\u2026\n\n\ud83d\udc33 From a top-200 $SUI wallet (#166)\n\n\ud83d\udd0d https://t.co/G4zZ1bmzjE\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2112521583134667061",
       "claims": [
         {
-          "quote": "I hold at least 1 SUI.",
-          "claim_type": "balance_threshold",
+          "quote": "\ud83d\udcb0 2,075,237 $SUI (\u2248 $2,057,432)\n\n\ud83d\udce4 From: 0x6edd3be9\u2026\n\ud83d\udce5 To: 0xbaae485e\u2026",
+          "claim_type": "tx_replay",
           "params": {
-            "address": "0x1111111111111111111111111111111111111111111111111111111111111111",
+            "address": "0xbaae485e643532b4597f5ef9018103191452cc5c49ad7a3f5c59d9272c75ba69",
             "asset": "0x2::sui::SUI",
+            "since": "2026-10-20T10:51:00.000Z",
+            "until": "2026-10-20T12:31:00.000Z",
             "direction": "gte",
-            "amount": "1000000000"
+            "amount": "2075237000000000"
           },
-          "deadline": "2026-12-01T00:00:00.000Z",
-          "confidence": 0.95
-        }
-      ]
-    },
-    {
-      "id": "placeholder-beta-change",
-      "synthetic": true,
-      "handle": "placeholder_beta",
-      "platform": "x",
-      "published_at": "2026-10-02T12:00:00.000Z",
-      "sui_address": "0x2222222222222222222222222222222222222222222222222222222222222222",
-      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. I'm adding 2 SUI by December.",
-      "snapshot": {
-        "address": "0x2222222222222222222222222222222222222222222222222222222222222222",
-        "asset": "0x2::sui::SUI",
-        "balance": "5000000000",
-        "checkpoint": "0",
-        "asOf": "2026-10-02T12:00:00.000Z"
-      },
-      "claims": [
-        {
-          "quote": "I'm adding 2 SUI by December.",
-          "claim_type": "balance_change_since_ingest",
-          "params": {
-            "address": "0x2222222222222222222222222222222222222222222222222222222222222222",
-            "asset": "0x2::sui::SUI",
-            "direction": "gte",
-            "amount": "2000000000"
-          },
-          "deadline": "2026-12-15T00:00:00.000Z",
+          "deadline": "2026-10-20T12:31:00.000Z",
           "confidence": 0.9
         }
       ]
     },
     {
-      "id": "placeholder-gamma-replay",
-      "synthetic": true,
-      "handle": "placeholder_gamma",
-      "platform": "onchain",
-      "published_at": "2026-10-03T12:00:00.000Z",
-      "sui_address": "0x3333333333333333333333333333333333333333333333333333333333333333",
-      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. This address received at least 5 SUI between 1 Sep and 15 Sep 2026.",
+      "id": "x-onchainwatch-2112468657708093679",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-20T08:59:10.000Z",
+      "sui_address": "0x80eb2caa90f6a02beb2fa64382bad1737998d35248af070c9351fcc3e33fc2b8",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,812,734 $SUI (\u2248 $1,784,025)\n\n\ud83d\udce4 From: 0x3bd2949d\u2026\n\ud83d\udce5 To: 0x80eb2caa\u2026\n\n\ud83d\udc33 From a top-200 $SUI wallet (#83)\n\ud83d\udc0b Receiver now holds 6,975,435 $SUI\n\n\ud83d\udd0d https://t.co/oMELAxSpzi\n\n#OnChainWatch #WhaleAlert #SUI",
       "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2112468657708093679",
       "claims": [
         {
-          "quote": "This address received at least 5 SUI between 1 Sep and 15 Sep 2026.",
+          "quote": "\ud83d\udcb0 1,812,734 $SUI (\u2248 $1,784,025)\n\n\ud83d\udce4 From: 0x3bd2949d\u2026\n\ud83d\udce5 To: 0x80eb2caa\u2026",
           "claim_type": "tx_replay",
           "params": {
-            "address": "0x3333333333333333333333333333333333333333333333333333333333333333",
+            "address": "0x80eb2caa90f6a02beb2fa64382bad1737998d35248af070c9351fcc3e33fc2b8",
             "asset": "0x2::sui::SUI",
-            "since": "2026-09-01T00:00:00.000Z",
-            "until": "2026-09-15T00:00:00.000Z",
+            "since": "2026-10-20T08:45:00.000Z",
+            "until": "2026-10-20T09:00:00.000Z",
             "direction": "gte",
-            "amount": "5000000000"
+            "amount": "1812734000000000"
           },
-          "deadline": "2026-12-20T00:00:00.000Z",
-          "confidence": 0.92
+          "deadline": "2026-10-20T09:00:00.000Z",
+          "confidence": 0.9
         }
       ]
     },
     {
-      "id": "placeholder-delta-price",
-      "synthetic": true,
-      "handle": "placeholder_delta",
-      "platform": "substack",
-      "published_at": "2026-10-04T12:00:00.000Z",
-      "text": "PLACEHOLDER — not a real post. Replace this entry before the demo. SUI will be above $3 by December.",
+      "id": "x-onchainwatch-2112452984638444019",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-20T07:56:53.000Z",
+      "sui_address": "0x20e2c51ca852c8bc959eccf9e64c3083cba892dea64052c4d111247b9abae450",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 5,350,853 $SUI (\u2248 $5,295,718)\n\n\ud83d\udce4 From: 0x20e2c51c\u2026\n\ud83d\udce5 To: 0x9d122b31\u2026\n\n\ud83d\udcc8 11-day high for a single transfer\n\ud83d\udc33 Sender: #19 largest $SUI holder\n\n\ud83d\udd0d https://t.co/0ENF3rAtF0",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2112452984638444019",
       "claims": [
         {
-          "quote": "SUI will be above $3 by December.",
+          "quote": "\ud83d\udcb0 5,350,853 $SUI (\u2248 $5,295,718)\n\n\ud83d\udce4 From: 0x20e2c51c\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x20e2c51ca852c8bc959eccf9e64c3083cba892dea64052c4d111247b9abae450",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-20T07:43:00.000Z",
+            "until": "2026-10-20T07:58:00.000Z",
+            "direction": "gte",
+            "amount": "5350853000000000"
+          },
+          "deadline": "2026-10-20T07:58:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2112436525434622020",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-20T06:51:29.000Z",
+      "sui_address": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad",
+      "text": "\ud83d\udea8 Whale on the move \ud83d\udc0b\n\n\ud83d\udcb0 1,965,693 $SUI (\u2248 $1,946,936)\n\n\ud83d\udce4 From: 0x5fdfcc18\u2026\n\ud83d\udce5 To: 0x7ab9a6a7\u2026\n\n\ud83d\udc33 To a top-200 $SUI wallet (#1)\n\ud83d\udc0b Receiving wallet balance: 389,289,662 $SUI\n\n\ud83d\udd0d https://t.co/oUWQFMr1Rb\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2112436525434622020",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,965,693 $SUI (\u2248 $1,946,936)\n\n\ud83d\udce4 From: 0x5fdfcc18\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x5fdfcc18e0791862c107c49ea13a5bcf4965f00ac057f56ea04034ebb5ea45ad",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-20T06:02:00.000Z",
+            "until": "2026-10-20T06:52:00.000Z",
+            "direction": "gte",
+            "amount": "1965693000000000"
+          },
+          "deadline": "2026-10-20T06:52:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2111200188878475740",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-16T20:58:43.000Z",
+      "sui_address": "0x6a0f71c0bd78e84a98052b1aaa8aba4ad649bdc3c41c4d0553d7ad81e833952c",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,102,763 $SUI (\u2248 $1,121,511)\n\n\ud83d\udce4 From: 0xa2a1323d\u2026\n\ud83d\udce5 To: 0x6a0f71c0\u2026\n\n\ud83d\udc33 To a top-200 $SUI wallet (#57)\n\ud83d\udc0b Receiving wallet balance: 11,556,926 $SUI\n\n\ud83d\udd0d https://t.co/jT8tHpxFoS\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2111200188878475740",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,102,763 $SUI (\u2248 $1,121,511)\n\n\ud83d\udce4 From: 0xa2a1323d\u2026\n\ud83d\udce5 To: 0x6a0f71c0\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x6a0f71c0bd78e84a98052b1aaa8aba4ad649bdc3c41c4d0553d7ad81e833952c",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-16T20:42:00.000Z",
+            "until": "2026-10-16T21:00:00.000Z",
+            "direction": "gte",
+            "amount": "1102763000000000"
+          },
+          "deadline": "2026-10-16T21:00:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2111110899293458705",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-16T15:03:55.000Z",
+      "sui_address": "0x341fa71e4e58d63668034125c3152f935b00b0bb5c68069045d8c646d017fae1",
+      "text": "\ud83d\udea8 Large SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 2,000,000 $SUI (\u2248 $2,090,000)\n\n\ud83d\udce4 From: 0x341fa71e\u2026\n\ud83d\udce5 To: 0x51f8fb27\u2026\n\n\ud83d\udc33 Sender: #113 largest SUI holder\n\ud83e\uddf9 Sending wallet fully cleared out\n\n\ud83d\udd0d https://t.co/6smTc4sBWK",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2111110899293458705",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 2,000,000 $SUI (\u2248 $2,090,000)\n\n\ud83d\udce4 From: 0x341fa71e\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x341fa71e4e58d63668034125c3152f935b00b0bb5c68069045d8c646d017fae1",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-16T14:52:00.000Z",
+            "until": "2026-10-16T15:05:00.000Z",
+            "direction": "gte",
+            "amount": "2000000000000000"
+          },
+          "deadline": "2026-10-16T15:05:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2110763273754640768",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-15T16:02:35.000Z",
+      "sui_address": "0x2de3bc906d1fa9c85e44cf9b0642447126879cb776f5ee3749bd2e32247ba52e",
+      "text": "\ud83d\udea8 Big SUI movement detected \ud83d\udc0b\n\n\ud83d\udcb0 1,000,000 $SUI (\u2248 $1,029,000)\n\n\ud83d\udce4 From: 0x2de3bc90\u2026\n\ud83d\udce5 To: #KuCoin\n\n\ud83d\udce5 Coins moved to an exchange, which can precede selling.\n\n\ud83d\udc33 Sender: #89 largest $SUI holder\n\n\ud83d\udd0d https://t.co/W1LaWGqDTK\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2110763273754640768",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,000,000 $SUI (\u2248 $1,029,000)\n\n\ud83d\udce4 From: 0x2de3bc90\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x2de3bc906d1fa9c85e44cf9b0642447126879cb776f5ee3749bd2e32247ba52e",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-15T15:44:00.000Z",
+            "until": "2026-10-15T16:04:00.000Z",
+            "direction": "gte",
+            "amount": "1000000000000000"
+          },
+          "deadline": "2026-10-15T16:04:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2110750976411885808",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-15T15:13:43.000Z",
+      "sui_address": "0x4c308e73bd97118d799bd478c060dad2751a6d5122673102adab5ab7eaaaee23",
+      "text": "\ud83d\udea8 SUI Whale Alert \ud83d\udc0b\n\n\ud83d\udcb0 1,043,267 $SUI (\u2248 $1,052,656)\n\n\ud83d\udce4 From: 0x4c308e73\u2026\n\ud83d\udce5 To: 0x51562a3b\u2026\n\n\ud83d\udc33 Receiver: #156 largest $SUI holder\n\ud83d\udc0b Receiving wallet balance: 2,234,918 $SUI\n\n\ud83d\udd0d https://t.co/OEwDqtQdFP",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2110750976411885808",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,043,267 $SUI (\u2248 $1,052,656)\n\n\ud83d\udce4 From: 0x4c308e73\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x4c308e73bd97118d799bd478c060dad2751a6d5122673102adab5ab7eaaaee23",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-15T14:58:00.000Z",
+            "until": "2026-10-15T15:15:00.000Z",
+            "direction": "gte",
+            "amount": "1043267000000000"
+          },
+          "deadline": "2026-10-15T15:15:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2110615724871885192",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-15T06:16:16.000Z",
+      "sui_address": "0xdad8b77b746f38cbac5044eb7b2c7232f9e38f30e2868f0e5bf311cd83554b5a",
+      "text": "\ud83d\udea8 Big SUI movement detected \ud83d\udc0b\n\n\ud83d\udcb0 1,846,275 $SUI (\u2248 $1,831,682)\n\n\ud83d\udce4 From: 0xdad8b77b\u2026\n\ud83d\udce5 To: #OKX\n\n\ud83d\udce5 Exchange deposit detected. Possible sell pressure ahead?\n\n\ud83d\udc33 Sender: #4 largest $SUI holder\n\n\ud83d\udd0d https://t.co/TtfcamiY6r\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2110615724871885192",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,846,275 $SUI (\u2248 $1,831,682)\n\n\ud83d\udce4 From: 0xdad8b77b\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0xdad8b77b746f38cbac5044eb7b2c7232f9e38f30e2868f0e5bf311cd83554b5a",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-15T03:01:00.000Z",
+            "until": "2026-10-15T06:18:00.000Z",
+            "direction": "gte",
+            "amount": "1846275000000000"
+          },
+          "deadline": "2026-10-15T06:18:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2110326592278790611",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-14T11:07:22.000Z",
+      "sui_address": "0x1f2e2700525b704214930cd2c9f6599c6460698339a6ab1f6a1e1c80dbc50959",
+      "text": "\ud83d\udea8 Large $SUI transfer spotted \ud83d\udc0b\n\n\ud83d\udcb0 1,765,499 $SUI (\u2248 $1,864,368)\n\n\ud83d\udce4 From: #Cryptocom\n\ud83d\udce5 To: 0x1f2e2700\u2026\n\n\ud83d\udce4 Coins left an exchange, often a sign of accumulation.\n\n\ud83d\udd0d https://t.co/VwSMPXIyK9\n\n#OnChainWatch #WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2110326592278790611",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 1,765,499 $SUI (\u2248 $1,864,368)\n\n\ud83d\udce4 From: #Cryptocom\n\ud83d\udce5 To: 0x1f2e2700\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x1f2e2700525b704214930cd2c9f6599c6460698339a6ab1f6a1e1c80dbc50959",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-14T07:22:00.000Z",
+            "until": "2026-10-14T11:09:00.000Z",
+            "direction": "gte",
+            "amount": "1765499000000000"
+          },
+          "deadline": "2026-10-14T11:09:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-onchainwatch-2109915055093399909",
+      "handle": "_OnChainWatch",
+      "platform": "x",
+      "published_at": "2026-10-13T07:52:04.000Z",
+      "sui_address": "0x376afef39c3016ed9459e149f3cda2dcb5d9a0d4ef189d84b9b70060c30471da",
+      "text": "\ud83d\udea8 Whale on the move \ud83d\udc0b\n\n\ud83d\udcb0 2,344,991 $SUI (\u2248 $2,518,521)\n\n\ud83d\udce4 From: #Bybit\n\ud83d\udce5 To: 0x376afef3\u2026\n\n\ud83d\udce4 Exchange outflow: withdrawals like this often mean long-term holding.\n\n\ud83d\udd0d https://t.co/Rymm8fCTCu\n\n#WhaleAlert #SUI",
+      "snapshot": null,
+      "source_url": "https://x.com/_OnChainWatch/status/2109915055093399909",
+      "claims": [
+        {
+          "quote": "\ud83d\udcb0 2,344,991 $SUI (\u2248 $2,518,521)\n\n\ud83d\udce4 From: #Bybit\n\ud83d\udce5 To: 0x376afef3\u2026",
+          "claim_type": "tx_replay",
+          "params": {
+            "address": "0x376afef39c3016ed9459e149f3cda2dcb5d9a0d4ef189d84b9b70060c30471da",
+            "asset": "0x2::sui::SUI",
+            "since": "2026-10-13T07:40:00.000Z",
+            "until": "2026-10-13T07:54:00.000Z",
+            "direction": "gte",
+            "amount": "2344991000000000"
+          },
+          "deadline": "2026-10-13T07:54:00.000Z",
+          "confidence": 0.9
+        }
+      ]
+    },
+    {
+      "id": "x-waheimagokoro-2112064956904710279",
+      "handle": "WaheiMagokoro",
+      "platform": "x",
+      "published_at": "2026-10-19T06:15:00.000Z",
+      "text": "$SUI is showing a market structure shift from bearish to bullish. If $SUI holds firmly above the key psychological  level around $1.00 this week, the short-term upside over the next few weeks could target $2.00. Stay disciplined.\n\nNFA. Always DYOR. https://t.co/ut8M7MpLxV",
+      "source_url": "https://x.com/WaheiMagokoro/status/2112064956904710279",
+      "claims": [
+        {
+          "quote": "If $SUI holds firmly above the key psychological  level around $1.00 this week, the short-term upside over the next few weeks could target $2.00",
           "claim_type": "price_threshold",
           "params": {
             "symbol": "SUI",
             "quote": "USD",
             "direction": "gte",
-            "amount": "3"
+            "amount": "2"
           },
-          "deadline": "2026-12-31T00:00:00.000Z",
-          "confidence": 0.88
+          "deadline": "2026-11-08T00:00:00.000Z",
+          "confidence": 0.6
+        }
+      ]
+    },
+    {
+      "id": "x-blackarrowcalls-2111752143938183596",
+      "handle": "blackarrowcalls",
+      "platform": "x",
+      "published_at": "2026-10-18T09:32:00.000Z",
+      "text": "$SUI Double bottom pattern\n\nTarget: 1.28\nSL: 0.9 https://t.co/4HJOJdT147",
+      "source_url": "https://x.com/blackarrowcalls/status/2111752143938183596",
+      "claims": [
+        {
+          "quote": "Target: 1.28\nSL: 0.9",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "gte",
+            "amount": "1.28"
+          },
+          "deadline": "2026-11-08T00:00:00.000Z",
+          "confidence": 0.65
+        }
+      ]
+    },
+    {
+      "id": "x-mrcamerontrader-2111749203479154711",
+      "handle": "mrcamerontrader",
+      "platform": "x",
+      "published_at": "2026-10-18T09:20:19.000Z",
+      "text": "$SUI Double bottom pattern\n\nTarget: 1.28\nSL: 0.9\n#crypto https://t.co/03ZTwMRCnn",
+      "source_url": "https://x.com/mrcamerontrader/status/2111749203479154711",
+      "claims": [
+        {
+          "quote": "Target: 1.28\nSL: 0.9",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "gte",
+            "amount": "1.28"
+          },
+          "deadline": "2026-11-08T00:00:00.000Z",
+          "confidence": 0.65
+        }
+      ]
+    },
+    {
+      "id": "x-cryptowithgopal-2111411796250861956",
+      "handle": "cryptowithgopal",
+      "platform": "x",
+      "published_at": "2026-10-17T10:59:35.000Z",
+      "text": "$SUI forming a falling wedge on the 4H chart \ud83d\udc40\ud83d\udcc9\n\nBulls are trying to defend the $0.95\u2013$1.00 support zone! A breakout above $1.08\u2013$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target \ud83c\udfaf\ud83d\udcc8\ud83d\udd25\n\nA clean breakout could shift momentum in favor of buyers, while losing $0.95 may weaken the setup.\n\nSentiment: Cautiously bullish \u2014 waiting for breakout confirmation! \ud83d\ude80\n\n$SUI #SUI #Crypto #Altcoins #TechnicalAnalysis",
+      "source_url": "https://x.com/cryptowithgopal/status/2111411796250861956",
+      "claims": [
+        {
+          "quote": "A breakout above $1.08\u2013$1.10 could trigger a bullish reversal, with the chart pointing toward a potential $1.28 target",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "gte",
+            "amount": "1.28"
+          },
+          "deadline": "2026-11-08T00:00:00.000Z",
+          "confidence": 0.6
+        }
+      ]
+    },
+    {
+      "id": "x-hodlnex-2111007143029625287",
+      "handle": "HODLnex",
+      "platform": "x",
+      "published_at": "2026-10-16T08:11:38.000Z",
+      "text": "$SUI Bulls Are Back in Action \u2014 Can Price Break Above $1.05 and Target $1.10?\n\nTrade Setup: Long\n\nEntry Zone: $1.0350 \u2013 $1.0450 TP1: $1.0570 TP2: $1.0750 TP3: $1.1000 SL: $1.0150\n\n\ud83d\ude80 Join Our Official Telegram & Get VIP Access \u27a1\ufe0f https://t.co/pf56UgyGTc",
+      "source_url": "https://x.com/HODLnex/status/2111007143029625287",
+      "claims": [
+        {
+          "quote": "TP3: $1.1000 SL: $1.0150",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "gte",
+            "amount": "1.1"
+          },
+          "deadline": "2026-10-30T00:00:00.000Z",
+          "confidence": 0.65
+        }
+      ]
+    },
+    {
+      "id": "x-gandreou007-2112416018446565762",
+      "handle": "gandreou007",
+      "platform": "x",
+      "published_at": "2026-10-20T05:30:00.000Z",
+      "text": "\u26a1 $SUI: THE NEXT MOVE COULD START WITH A RETEST OF 0.85.\n\nPrice has broken the inner descending trendline, but the larger resistance remains overhead.\n\nThe scenario starts with a pullback into 0.82\u20130.88. Holding this zone could establish a higher low before another attempt at the major trendline.\n\nA confirmed breakout and successful retest would bring 1.25\u20131.32 and 1.38\u20131.45 into focus.\n\nBeyond that, the Fibonacci extension near 1.70 provides another checkpoint before the 1.95\u20132.05 region.\n\nReaching 2.00 from 0.85 would represent approximately 135% upside.\n\nLosing 0.82 would weaken this setup and expose the lower 0.65\u20130.72 support.",
+      "source_url": "https://x.com/gandreou007/status/2112416018446565762",
+      "claims": [
+        {
+          "quote": "THE NEXT MOVE COULD START WITH A RETEST OF 0.85.",
+          "claim_type": "price_threshold",
+          "params": {
+            "symbol": "SUI",
+            "quote": "USD",
+            "direction": "lte",
+            "amount": "0.88"
+          },
+          "deadline": "2026-11-08T00:00:00.000Z",
+          "confidence": 0.6
         }
       ]
     }

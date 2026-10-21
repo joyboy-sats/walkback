@@ -212,10 +212,15 @@ export async function queryTransactionBlocks(
     /** Stop paging once a block older than this appears. */
     untilIso?: string;
     maxPages?: number;
+    /**
+     * Which side of the transfer to ask for. `FromAddress` misses inflows.
+     * `netChangeInWindow` queries both.
+     */
+    filter?: "FromAddress" | "ToAddress";
   } = {},
 ): Promise<{ blocks: TransactionBlock[]; nextCursor: string | null; hasNextPage: boolean }> {
   assertAddress(address);
-  const { limit = 50, cursor = null, untilIso, maxPages = 4 } = opts;
+  const { limit = 50, cursor = null, untilIso, maxPages = 4, filter = "FromAddress" } = opts;
 
   const blocks: TransactionBlock[] = [];
   let pageCursor = cursor;
@@ -235,7 +240,7 @@ export async function queryTransactionBlocks(
       nextCursor?: string | null;
       hasNextPage?: boolean;
     }>("suix_queryTransactionBlocks", [
-      { filter: { FromAddress: address }, options: { showBalanceChanges: true } },
+      { filter: { [filter]: address }, options: { showBalanceChanges: true } },
       pageCursor,
       limit,
       true,
@@ -269,8 +274,58 @@ export async function queryTransactionBlocks(
 }
 
 /**
+ * Whether a newest-first page walk still has unseen blocks inside the window.
+ *
+ * The RPC reports `hasNextPage` for history older than `sinceIso` as well.
+ * Stopping because the oldest block is already before the window means the
+ * window itself was fully read.
+ */
+export function replayTruncated(input: {
+  hasNextPage: boolean;
+  oldestTimestamp?: string;
+  sinceIso: string;
+}): boolean {
+  if (!input.hasNextPage) return false;
+  if (input.oldestTimestamp && input.oldestTimestamp < input.sinceIso) return false;
+  return true;
+}
+
+/** Merge FromAddress and ToAddress pages. One digest is counted once. */
+export function combineReplaySides(
+  sides: ReadonlyArray<{ blocks: TransactionBlock[]; hasNextPage: boolean }>,
+  sinceIso: string,
+): { blocks: TransactionBlock[]; truncated: boolean } {
+  const byDigest = new Map<string, TransactionBlock>();
+  for (const side of sides) {
+    for (const tx of side.blocks) {
+      if (!byDigest.has(tx.digest)) byDigest.set(tx.digest, tx);
+    }
+  }
+  const truncated = sides.some((side) =>
+    replayTruncated({
+      hasNextPage: side.hasNextPage,
+      oldestTimestamp: oldestTimestamp(side.blocks),
+      sinceIso,
+    }),
+  );
+  return { blocks: [...byDigest.values()], truncated };
+}
+
+function oldestTimestamp(blocks: readonly TransactionBlock[]): string | undefined {
+  let oldest: string | undefined;
+  for (const tx of blocks) {
+    if (!tx.timestamp) continue;
+    if (!oldest || tx.timestamp < oldest) oldest = tx.timestamp;
+  }
+  return oldest;
+}
+
+/**
  * Net balance change for one coin type inside a window, derived by replaying
  * transfers. Used only for claims that predate the snapshot mechanism.
+ *
+ * Queries both the sender and recipient filters. A transfer into the address
+ * does not appear in `FromAddress`.
  */
 export async function netChangeInWindow(
   address: string,
@@ -279,10 +334,17 @@ export async function netChangeInWindow(
   untilIso: string,
   maxPages = 6,
 ): Promise<{ net: string; sampledBlocks: number; truncated: boolean }> {
-  const { blocks, hasNextPage } = await queryTransactionBlocks(address, {
-    untilIso: sinceIso,
-    maxPages,
-  });
+  const [sent, received] = await Promise.all([
+    queryTransactionBlocks(address, { untilIso: sinceIso, maxPages, filter: "FromAddress" }),
+    queryTransactionBlocks(address, { untilIso: sinceIso, maxPages, filter: "ToAddress" }),
+  ]);
+  const { blocks, truncated } = combineReplaySides(
+    [
+      { blocks: sent.blocks, hasNextPage: sent.hasNextPage },
+      { blocks: received.blocks, hasNextPage: received.hasNextPage },
+    ],
+    sinceIso,
+  );
 
   let net = 0n;
   let counted = 0;
@@ -301,9 +363,9 @@ export async function netChangeInWindow(
   return {
     net: net.toString(),
     sampledBlocks: counted,
-    // If we hit the page cap while more history exists, the number is a floor,
-    // not a total. Callers must void rather than guess.
-    truncated: hasNextPage,
+    // Page cap reached while more history inside the window may exist.
+    // Callers must void rather than guess.
+    truncated,
   };
 }
 

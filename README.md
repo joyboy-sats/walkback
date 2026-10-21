@@ -109,14 +109,18 @@ From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
 ## Adding claims
 
 `npm run seed` reads `data/claims.json` and runs each post through the same
-ingest path as the app. Real posts are the dataset. The file in the repo is a
-placeholder so the shape is obvious: every entry has `"synthetic": true`, the
-handles start with `placeholder_`, and the text says so. Synthetic claims are
-labelled in the feed, on the source page, and in the memory text, and the seed
-summary counts them separately from real ones. The script warns when synthetic
-posts are not a minority. Replace the placeholders before the demo.
+ingest path as the app. The file in the repo is the real set: 17 posts, 17
+claims, 7 handles. Eleven are `tx_replay` posts from `@_OnChainWatch`. Six are
+`price_threshold` posts, all `SUI` against `USD`. None are marked synthetic.
+`@mysqlsui` and both `balance_threshold` claims were left out on purpose.
+Each post has `source_url`, the permalink of the original X post. The feed
+and the source page link there when the URL is `https`.
 
-A real post:
+A post with `"synthetic": true` is a demo fallback. The seed summary counts
+those separately and warns when they are not a minority. Keep any fixture
+like that out of `data/claims.json`, or label it.
+
+Shape of a post:
 
 ```json
 {
@@ -124,37 +128,42 @@ A real post:
   "handle": "alice",
   "platform": "x",
   "published_at": "2026-10-18T15:04:00.000Z",
+  "source_url": "https://x.com/alice/status/1",
   "sui_address": "0x…",
   "text": "the post, verbatim",
-  "snapshot": {
-    "address": "0x…",
-    "asset": "0x2::sui::SUI",
-    "balance": "123000000000",
-    "asOf": "2026-10-18T15:04:05.000Z"
-  }
+  "snapshot": null
 }
 ```
 
-Leave `synthetic` off. `id` is a stable slug: re-running the seed finds it and
-does not write the post again. Use a new handle for a real source. A
-placeholder handle already has a source memory, and memory is append-only, so
-that first synthetic memory is the one recall will keep finding. Omit `claims` and the model extracts them from
-`text`. For a historical transfer, set `claims` yourself with
-`"claim_type": "tx_replay"` and `since` / `until` in the params, so the window
-is the one you mean. A `snapshot` recorded when you collected the post is the
-receipt for `balance_change_since_ingest`. Sui cannot answer what the balance
-was then, so a change claim without that receipt cannot be checked later.
+Leave `synthetic` off. `id` is a lowercase slug (letters, digits, hyphens):
+re-running the seed finds it and does not write the post again. Omit `claims`
+and the model extracts them from `text`. The committed file sets `claims` on
+every post, so the seed does not call the model. For a historical transfer,
+`"claim_type": "tx_replay"` carries `since` / `until` in the params. A
+`snapshot` recorded when you collected the post is the receipt for
+`balance_change_since_ingest`. Sui cannot answer what the balance was then.
 `"snapshot": null` means there is no receipt and the seed will not call Tatum
-to invent one. Omit `snapshot` to read the live balance at seed time.
+for a live balance. Omit `snapshot` to read the live balance at seed time.
+The replay posts in the file use `null`, because a live balance is not the
+receipt for a past transfer.
 
-Run the seed on Coolify, where `DATABASE_URL` and the provider keys exist. It
-needs the Walrus delegate key, and — only for posts that omit `claims` or
-`snapshot` — `AI_GATEWAY_API_KEY` and `TATUM_API_KEY`. The summary prints
-memory counts per namespace, every blob id, and the score of each source.
+Postgres is on Coolify's internal network. A laptop cannot open `DATABASE_URL`.
+Run the seed in the Coolify **worker** container's terminal, after this image
+is deployed. The worker and the API apply `drizzle/` on boot, including
+`claims.source_url`. `npm run seed` does not migrate. The container already
+has `DATABASE_URL`, `MEMWAL_PRIVATE_KEY`, and `TATUM_API_KEY`.
 
 ```bash
 npm run seed
+npm run list:memories
 ```
+
+`TATUM_API_KEY` is required: the eleven replay deadlines are already past, so
+the seed resolves them. `AI_GATEWAY_API_KEY` is not, because every post
+already has `claims`. The summary prints memory counts per namespace, every
+blob id, and the score of each source. `list:memories` prints the whole
+delegate account, not only this run. The worker image includes `scripts/`,
+`data/claims.json`, and `tsx`, which those two commands need.
 
 ## Deployment
 
@@ -248,14 +257,19 @@ The API does not need the Walrus or Tatum keys.
 | `WORKER_POLL_MS` | Optional. Default `2000`. |
 | `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. The pass enqueues only when a claim is pending and past its deadline, and it waits longer after a claim's resolve keeps throwing. |
 
-Seed is a one-off with the worker’s environment: `npm run seed`.
+Seed is a one-off in the worker container's terminal, after the image is deployed: `npm run seed`, then `npm run list:memories`. The worker image includes `scripts/`, `data/claims.json`, and `tsx`.
 
 ## Known open questions
 
-- `price_threshold` depends on the Tatum rate endpoint supporting `symbol=SUI`.
-  The endpoint requires auth, so this is unverified until a key exists. If Sui
-  is unsupported, the claim type gets disabled in config rather than shipped
-  broken.
+- `price_threshold` is priced by `getRate` in `lib/tatum.ts`, which calls the
+  Tatum rate endpoint (`TATUM_RATE_URL`, default
+  `https://api.tatum.io/v4/data/rate/symbol`) with `symbol` and `basePair`.
+  There is no CoinGecko client. The six seeded price claims are all `SUI` /
+  `USD`, so resolution asks for exactly that pair. Support for `symbol=SUI`
+  is unverified: the endpoint needs `TATUM_API_KEY`, and a 404 or a null
+  `value` becomes `void` ("the rate feed does not cover SUI/USD"). A void does
+  not move the score. Those six deadlines are 2026-10-30 and 2026-11-08, so
+  the seed does not call the rate endpoint.
 - `restore()` has no pagination cursor and costs seconds per blob; large
   namespaces may not fully restore in one call.
 

@@ -110,6 +110,11 @@ export const claims = pgTable(
      * pasted through the UI. Re-running the seed looks this up and skips.
      */
     externalId: text("external_id"),
+    /**
+     * Link to the original post. Null for claims pasted through the UI.
+     * The feed and the source page render it when it is an https URL.
+     */
+    sourceUrl: text("source_url"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     walrusBlobId: text("walrus_blob_id"),
   },

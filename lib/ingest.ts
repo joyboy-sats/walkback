@@ -75,6 +75,8 @@ export interface IngestInput {
   recordedSnapshot?: BalanceSnapshot | null;
   /** Demo fallback. Surfaced on the claim row and in the memory text. */
   synthetic?: boolean;
+  /** Permalink of the original post. Stored on each claim and in its memory. */
+  sourceUrl?: string;
   /**
    * Stable id of a seeded post. Claims are stored under `post:{id}:{index}`
    * so a second seed run finds them and does not write again.
@@ -269,6 +271,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
         confidence: c.confidence,
         status: "pending" as const,
         synthetic,
+        sourceUrl: input.sourceUrl ?? null,
       };
     });
     if (input.externalId) {
@@ -292,6 +295,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
           confidence: c.confidence,
           synthetic,
           externalId: null,
+          sourceUrl: input.sourceUrl ?? null,
           snapshot: snapshot as unknown as Record<string, unknown> | null,
           walrusBlobId: null,
         };
@@ -350,6 +354,7 @@ const claimColumns = {
   confidence: schema.claims.confidence,
   synthetic: schema.claims.synthetic,
   externalId: schema.claims.externalId,
+  sourceUrl: schema.claims.sourceUrl,
   snapshot: schema.claims.snapshot,
   walrusBlobId: schema.claims.walrusBlobId,
 };
@@ -364,6 +369,7 @@ interface ClaimRow {
   confidence: number;
   synthetic: boolean;
   externalId: string | null;
+  sourceUrl: string | null;
   snapshot: Record<string, unknown> | null;
   walrusBlobId: string | null;
 }
@@ -478,6 +484,7 @@ async function resumeSeedPost(
             confidence: c.confidence,
             status: "pending" as const,
             synthetic: input.synthetic === true,
+            sourceUrl: input.sourceUrl ?? null,
           };
         }),
       )
@@ -542,7 +549,11 @@ function claimWrite(row: ClaimRow, handle: string, snapshot: BalanceSnapshot | n
     },
     { quote: row.quote, claimType: row.claimType, params, deadline, confidence: row.confidence },
     snapshot,
-    { synthetic: row.synthetic, ...(row.externalId ? { externalId: row.externalId } : {}) },
+    {
+      synthetic: row.synthetic,
+      ...(row.externalId ? { externalId: row.externalId } : {}),
+      ...(row.sourceUrl ? { sourceUrl: row.sourceUrl } : {}),
+    },
   );
   return { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };
 }
