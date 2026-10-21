@@ -44,11 +44,14 @@ function badgeBorderGlowConfig(
   rimEmphasis: boolean,
   rimVariant: RimVariant = "default"
 ) {
+  // The rim sits on a near-black hero. The old 0.5–0.7 idle opacity
+  // disappeared into that surface; keep the same gradients, just bright
+  // enough that the motion reads.
   let idleOpacity: number
   if (translucent) {
-    idleOpacity = rimEmphasis ? 0.92 : 0.72
+    idleOpacity = rimEmphasis ? 1 : 0.96
   } else {
-    idleOpacity = rimEmphasis ? 0.78 : 0.5
+    idleOpacity = rimEmphasis ? 1 : 0.9
   }
   const gradients = RIM_BLOB_GRADIENTS[rimVariant]
   return {
@@ -70,16 +73,18 @@ function badgeFillBackgroundFor(
   interactive: boolean,
   rimEmphasis: boolean
 ) {
-  if (translucent) {
-    if (interactive && rimEmphasis) {
-      return "linear-gradient(to bottom, color-mix(in oklch, var(--card) 88%, transparent) 0%, color-mix(in oklch, var(--card) 74%, transparent) 100%)"
-    }
-    return "linear-gradient(to bottom, color-mix(in oklch, var(--card) 82%, transparent) 0%, color-mix(in oklch, var(--card) 70%, transparent) 100%)"
-  }
-  if (interactive && rimEmphasis) {
-    return "linear-gradient(to bottom, var(--card) 0%, color-mix(in oklch, var(--card) 90%, var(--muted)) 100%)"
-  }
-  return "linear-gradient(to bottom, var(--card) 0%, color-mix(in oklch, var(--card) 94%, var(--muted)) 100%)"
+  // Heroes are surface-1. The chip has to step up to surface-3 or it is the
+  // same colour as the card behind it. A little accent in the top edge keeps
+  // it in the rim's family; the body stays opaque so the label contrast holds.
+  const top = rimEmphasis
+    ? "color-mix(in oklch, var(--color-surface-3) 78%, var(--color-accent) 22%)"
+    : interactive
+      ? "color-mix(in oklch, var(--color-surface-3) 86%, var(--color-accent) 14%)"
+      : "color-mix(in oklch, var(--color-surface-3) 92%, var(--color-accent) 8%)"
+  const bottom = translucent
+    ? "color-mix(in oklch, var(--color-surface-2) 88%, black)"
+    : "color-mix(in oklch, var(--color-surface-3) 94%, black)"
+  return `linear-gradient(to bottom, ${top} 0%, ${bottom} 100%)`
 }
 
 const layoutTransition = {
@@ -112,21 +117,21 @@ function BadgeAmbientUnderglow({ reduceMotion }: { reduceMotion: boolean }) {
       <div
         className={cn(
           "absolute inset-0",
-          reduceMotion ? "opacity-[0.38]" : "opacity-50"
+          reduceMotion ? "opacity-70" : "opacity-100"
         )}
       >
         <div
-          className="absolute inset-0 blur-2xl"
+          className="absolute inset-0 blur-xl"
           style={{
             background:
-              "radial-gradient(90% 70% at 50% 100%, rgba(255,0,128,0.28), rgba(121,40,202,0.12) 48%, transparent 62%)",
+              "radial-gradient(90% 80% at 50% 100%, rgba(255,0,128,0.85), rgba(143,123,240,0.55) 46%, transparent 70%)",
           }}
         />
         <div
-          className="absolute inset-0 opacity-70 blur-xl dark:opacity-50"
+          className="absolute inset-0 blur-md"
           style={{
             background:
-              "radial-gradient(70% 55% at 30% 0%, rgba(0,212,255,0.22), rgba(0,112,243,0.08) 45%, transparent 58%)",
+              "radial-gradient(70% 70% at 30% 0%, rgba(0,212,255,0.7), rgba(121,40,202,0.28) 48%, transparent 68%)",
           }}
         />
       </div>
@@ -147,17 +152,17 @@ function BadgeRimPillBlobs({
       <motion.div
         animate={{
           opacity: reduceMotion
-            ? borderGlow.opacityIdle * 0.82
+            ? borderGlow.opacityIdle * 0.9
             : borderGlow.opacityIdle,
         }}
-        className="absolute inset-x-0 bottom-0 h-1/2"
+        className="absolute inset-0"
         transition={{ duration: 0.25, ease: "easeOut" }}
       >
         <motion.div
           animate={{
             left: borderGlow.primaryLeft,
           }}
-          className="-bottom-2 absolute h-10 w-28 blur-xl"
+          className="absolute top-1/2 h-10 w-28 -translate-y-1/2 blur-md"
           style={{
             background: borderGlow.primaryBg,
           }}
@@ -171,7 +176,7 @@ function BadgeRimPillBlobs({
           animate={{
             left: borderGlow.secondaryLeft,
           }}
-          className="-bottom-1.5 absolute h-8 w-20 blur-lg"
+          className="absolute top-0 h-8 w-20 blur-sm"
           style={{
             background: borderGlow.secondaryBg,
           }}
@@ -185,7 +190,7 @@ function BadgeRimPillBlobs({
           animate={{
             left: borderGlow.tertiaryLeft,
           }}
-          className="-bottom-1 absolute h-6 w-16 blur-md"
+          className="absolute bottom-0 h-8 w-16 blur-sm"
           style={{
             background: borderGlow.tertiaryBg,
           }}
@@ -204,11 +209,13 @@ const chromedLabelClasses: Record<
   "default" | "secondary" | "destructive" | "outline",
   string
 > = {
-  default: "text-primary",
-  secondary: "text-muted-foreground",
-  destructive:
-    "text-destructive aria-invalid:text-destructive dark:aria-invalid:text-destructive",
-  outline: "text-foreground",
+  // Lightened against surface-3. The previous secondary colour was ink-3
+  // (#6b6b78), about 3.7:1 on the hero — the "ledger live" / "ingest" /
+  // "0 memories" pills disappeared. These sit above 7:1 on the chip fill.
+  default: "text-[#efeaff]",
+  secondary: "text-ink",
+  destructive: "text-[#ffd2d2]",
+  outline: "text-ink",
 }
 
 /** Border tints (same `color-mix` system as `HaloSwitch` shell). */
@@ -216,14 +223,10 @@ const chromedBorderClasses: Record<
   "default" | "secondary" | "destructive" | "outline",
   string
 > = {
-  default:
-    "border-[color-mix(in_oklch,var(--border)_72%,oklch(0.88_0.06_300))]",
-  secondary:
-    "border-[color-mix(in_oklch,var(--border)_72%,oklch(0.88_0.06_300))]",
-  destructive:
-    "border-[color-mix(in_oklch,var(--border)_65%,oklch(0.86_0.09_22))]",
-  outline:
-    "border-[color-mix(in_oklch,var(--border)_72%,oklch(0.88_0.06_300))]",
+  default: "border-[color-mix(in_oklch,var(--color-accent)_72%,white)]",
+  secondary: "border-[color-mix(in_oklch,var(--color-accent)_55%,#e4dcff)]",
+  destructive: "border-[color-mix(in_oklch,#ffb4b4_75%,white)]",
+  outline: "border-[color-mix(in_oklch,var(--color-ink-2)_55%,var(--color-accent))]",
 }
 
 /** Plain string/number children only — used to pick a perfect circle for single-digit counts. */
@@ -236,7 +239,7 @@ function plainChildLength(children: ReactNode): number | null {
 
 /** Explicit transform in transition (never `transition: all`). Easing matches cross-fade polish in the design skill. */
 const chromedSurfaceBase =
-  "relative z-[1] flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-2 font-medium text-[0.625rem] leading-none tracking-tight antialiased outline-none transition-[background-color,backdrop-filter,border-color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-2.5"
+  "relative z-[1] flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-full px-2 font-semibold text-[0.625rem] leading-none tracking-tight antialiased outline-none transition-[background-color,backdrop-filter,border-color,box-shadow,transform] duration-200 ease-[cubic-bezier(0.2,0,0,1)] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 [&>svg]:pointer-events-none [&>svg]:size-2.5"
 
 function chromedShapeClasses(
   singleDigitCircle: boolean,
@@ -337,7 +340,7 @@ function HaloBadgeChrome({
         Concentric radii: outer `rounded-full` + `p-px` (1px) with inner `rounded-full`
         reads as a pill ring; both use full rounding so caps stay semicircular.
       */}
-      <span className="relative z-[1] inline-flex items-center justify-center rounded-full p-px text-[0] leading-none">
+      <span className="relative z-[1] inline-flex items-center justify-center rounded-full p-[2px] text-[0] leading-none shadow-[0_0_16px_rgba(143,123,240,0.55)]">
         <BadgeRimPillBlobs
           borderGlow={borderGlow}
           reduceMotion={reduceMotion}
@@ -355,23 +358,20 @@ function HaloBadgeChrome({
             /* Shell border + shadows aligned with `HaloSwitch` outer shell */
             "border",
             chromedBorderClasses[chromedKey],
-            "shadow-[0_1px_0_rgba(255,255,255,0.55)_inset,0_1px_2px_rgba(0,0,0,0.03),0_6px_18px_rgba(0,0,0,0.04)]",
-            "dark:border-border/80 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_1px_2px_rgba(0,0,0,0.28),0_6px_22px_rgba(0,0,0,0.32)]",
+            "shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_0_12px_rgba(143,123,240,0.35)]",
             interactive &&
-              "fine-hover:hover:border-ring/50 fine-hover:hover:shadow-[0_1px_0_rgba(255,255,255,0.6)_inset,0_1px_3px_rgba(0,0,0,0.05),0_8px_22px_rgba(0,0,0,0.06)]",
-            interactive &&
-              "dark:fine-hover:hover:border-zinc-500/60 dark:fine-hover:hover:shadow-[0_1px_0_rgba(255,255,255,0.08)_inset,0_2px_4px_rgba(0,0,0,0.38),0_10px_28px_rgba(0,0,0,0.42)]",
-            translucent && "backdrop-blur-xl backdrop-saturate-150"
+              "hover:border-white/70 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.28),0_0_18px_rgba(143,123,240,0.6)]",
+            translucent && "backdrop-blur-md backdrop-saturate-150"
           )}
           style={{ background: fillBackground }}
         >
           {live ? (
             <motion.span
               animate={
-                reduceMotion ? { opacity: 1 } : { opacity: [0.35, 1, 0.35] }
+                reduceMotion ? { opacity: 1 } : { opacity: [0.72, 1, 0.72] }
               }
               aria-hidden
-              className="size-1.5 shrink-0 translate-y-[0.5px] self-center rounded-full bg-current opacity-90"
+              className="size-1.5 shrink-0 translate-y-[0.5px] self-center rounded-full bg-current opacity-100 shadow-[0_0_6px_currentColor]"
               transition={pulseTransition}
             />
           ) : null}
@@ -455,10 +455,10 @@ export function HaloBadge({
         {live ? (
           <motion.span
             animate={
-              reduceMotion ? { opacity: 1 } : { opacity: [0.35, 1, 0.35] }
+              reduceMotion ? { opacity: 1 } : { opacity: [0.72, 1, 0.72] }
             }
             aria-hidden
-            className="size-1.5 shrink-0 translate-y-[0.5px] self-center rounded-full bg-current opacity-90"
+            className="size-1.5 shrink-0 translate-y-[0.5px] self-center rounded-full bg-current opacity-100 shadow-[0_0_6px_currentColor]"
             transition={pulseTransition}
           />
         ) : null}

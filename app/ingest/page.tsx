@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
 import { apiPost, pollJob } from "@/lib/public-api";
 import { ReceiptIllustration, SealIllustration } from "@/components/illustrations";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { HaloBadge } from "@/components/ui/halo-badge";
-import { ArrowRight } from "lucide-react";
 
 /**
  * Paste a post and see exactly what ingest kept.
@@ -172,7 +172,7 @@ export default function IngestPage() {
       </section>
 
       {/* ── Form ───────────────────────────────────────────────────────── */}
-      <form onSubmit={onSubmit} className="max-w-2xl space-y-5">
+      <form onSubmit={onSubmit} className="space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="handle" hint="who is speaking">
             <input
@@ -187,14 +187,14 @@ export default function IngestPage() {
           </Field>
 
           <Field label="platform">
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {PLATFORMS.map((p) => (
                 <button
                   key={p}
                   type="button"
                   disabled={working}
                   onClick={() => setPlatform(p)}
-                  className={`flex-1 rounded-md border px-2 py-2 text-[12px] transition-colors ${
+                  className={`min-w-[4.25rem] flex-1 rounded-md border px-2 py-2 text-[12px] transition-colors ${
                     platform === p
                       ? "border-accent/60 bg-accent/10 text-ink"
                       : "border-line bg-surface-1 text-ink-3 hover:border-line-strong hover:text-ink-2"
@@ -206,12 +206,11 @@ export default function IngestPage() {
             </div>
           </Field>
 
-          <Field label="published at" hint="anchors relative deadlines">
-            <input
-              required
-              type="datetime-local"
+          <Field label="published at" hint="anchors relative deadlines" htmlFor="published-at">
+            <DateTimePicker
+              id="published-at"
               value={publishedAt}
-              onChange={(e) => setPublishedAt(e.target.value)}
+              onChange={setPublishedAt}
               disabled={working}
               className={inputClass}
             />
@@ -265,7 +264,7 @@ export default function IngestPage() {
 
       {/* ── Progress ───────────────────────────────────────────────────── */}
       {working && (
-        <div className="mt-6 max-w-2xl" aria-busy="true">
+        <div className="mt-6" aria-busy="true">
           <div className="pending-bar">
             <span />
           </div>
@@ -278,7 +277,7 @@ export default function IngestPage() {
       )}
 
       {phase === "error" && error && (
-        <div className="mt-6 max-w-2xl rounded-lg border border-false/30 bg-false/5 p-4">
+        <div className="mt-6 rounded-lg border border-false/30 bg-false/5 p-4">
           <p className="label mb-1 text-false">Failed</p>
           <p className="text-[13px] text-ink-2">{error}</p>
         </div>
@@ -294,7 +293,7 @@ function Result({ result }: { result: IngestResponse }) {
   const empty = count === 0;
 
   return (
-    <div className="mt-10 max-w-2xl space-y-8">
+    <div className="mt-10 space-y-8">
       {/* Summary */}
       <section>
         <div className="flex items-baseline gap-3">
@@ -424,17 +423,39 @@ function Field({
   label,
   hint,
   children,
+  htmlFor,
 }: {
   label: string;
   hint?: string;
   children: React.ReactNode;
+  /** Caption points at a control that cannot sit inside the label (the date button). */
+  htmlFor?: string;
 }) {
+  const caption = (
+    <span className="mb-1.5 flex items-baseline gap-2">
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="label">
+          {label}
+        </label>
+      ) : (
+        <span className="label">{label}</span>
+      )}
+      {hint && <span className="text-[11px] text-ink-3">{hint}</span>}
+    </span>
+  );
+
+  if (htmlFor) {
+    return (
+      <div>
+        {caption}
+        {children}
+      </div>
+    );
+  }
+
   return (
     <label className="block">
-      <span className="mb-1.5 flex items-baseline gap-2">
-        <span className="label">{label}</span>
-        {hint && <span className="text-[11px] text-ink-3">{hint}</span>}
-      </span>
+      {caption}
       {children}
     </label>
   );

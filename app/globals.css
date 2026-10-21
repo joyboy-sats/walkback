@@ -89,6 +89,27 @@
 
 :root {
   color-scheme: dark;
+
+  /* Classic shadcn names. Tailwind utilities read --color-*; a few components
+     (the halo badge rim, popovers) also read these raw variables. */
+  --background: var(--color-surface-0);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface-1);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface-2);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-surface-2);
+  --muted-foreground: var(--color-ink-3);
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-false);
+  --destructive-foreground: #ffffff;
+  --border: var(--color-line);
+  --input: var(--color-line);
+  --ring: var(--color-accent);
 }
 
 html {
@@ -219,4 +240,47 @@ body {
 * {
   scrollbar-color: var(--color-line-strong) transparent;
   scrollbar-width: thin;
+}
+
+/*
+ * Pointer on anything that acts like a control. Tailwind's preflight sets
+ * buttons to cursor: default; this wins over that (and over
+ * disabled:pointer-events-none) because it is unlayered. Disabled controls
+ * show not-allowed. Text fields keep the I-beam.
+ */
+a[href],
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+[role="tab"]:not([aria-disabled="true"]),
+summary,
+label:not(:has(:disabled)),
+select:not(:disabled),
+input[type="button"]:not(:disabled),
+input[type="submit"]:not(:disabled),
+input[type="reset"]:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+input[type="file"]:not(:disabled),
+input[type="range"]:not(:disabled) {
+  cursor: pointer;
+}
+
+input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+textarea {
+  cursor: text;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  pointer-events: auto;
 }
