@@ -6,6 +6,8 @@ import {
   applyOutcome,
   computeScore,
   hitRate,
+  scoreIsShown,
+  sourceIsMuted,
   trustBand,
   wilsonLowerBound,
 } from "./score";
@@ -92,6 +94,28 @@ describe("trustBand", () => {
   it("keeps band boundaries consistent with the exported thresholds", () => {
     expect(trustBand(TRUST_MUTED - 0.01, 10)).toBe("muted");
     expect(trustBand(TRUST_TRUSTED, 10)).toBe("trusted");
+  });
+});
+
+describe("sourceIsMuted", () => {
+  it("does not mute an unrated or under-sampled source", () => {
+    expect(sourceIsMuted(true, 0)).toBe(false);
+    expect(sourceIsMuted(true, MIN_SAMPLE - 1)).toBe(false);
+    expect(sourceIsMuted(false, 0)).toBe(false);
+  });
+
+  it("keeps a mute once three claims have been adjudicated", () => {
+    expect(sourceIsMuted(true, MIN_SAMPLE)).toBe(true);
+    expect(sourceIsMuted(false, 10)).toBe(false);
+  });
+
+  it("leaves a zero bound stored as zero while withholding the mute", () => {
+    const fresh = computeScore(0, 0);
+    expect(fresh.score).toBe(0);
+    expect(fresh.band).toBe("unknown");
+    expect(sourceIsMuted(true, fresh.adjudicated)).toBe(false);
+    expect(scoreIsShown(fresh.adjudicated)).toBe(false);
+    expect(scoreIsShown(MIN_SAMPLE)).toBe(true);
   });
 });
 

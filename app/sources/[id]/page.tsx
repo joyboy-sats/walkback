@@ -13,7 +13,7 @@
 import { notFound } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { ApiError, apiGet } from "@/lib/public-api";
-import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
+import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, scoreIsShown, trustBand } from "@/lib/score";
 import { formatCount, formatDateOnly, formatFixed, formatPercent } from "@/lib/locale-format";
 import { isLocale, type Locale } from "@/lib/locale";
 import { matchVoidReason, voidReasonValues } from "@/lib/void-reason";
@@ -62,6 +62,7 @@ export default async function SourcePage({
   const t = await getTranslations("source");
   const bandLabel = await getTranslations("band");
   const voidCopy = await getTranslations("voidReason");
+  const common = await getTranslations("common");
   const locale = await uiLocale();
   const { id } = await params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
@@ -84,7 +85,23 @@ export default async function SourcePage({
   const { source, versions, claims } = detail;
   const adjudicated = source.hits + source.misses;
   const band = trustBand(source.score, adjudicated);
+  const rated = scoreIsShown(adjudicated);
   const hitRate = adjudicated === 0 ? null : source.hits / adjudicated;
+  const deadlines = claims
+    .map((row) => row.claim.deadline)
+    .filter((value) => value.length >= 10)
+    .sort();
+  const firstDeadline = deadlines[0];
+  const lastDeadline = deadlines[deadlines.length - 1];
+  const windowLabel =
+    !firstDeadline || !lastDeadline
+      ? common("unavailable")
+      : firstDeadline.slice(0, 10) === lastDeadline.slice(0, 10)
+        ? formatDateOnly(firstDeadline, locale)
+        : t("windowRange", {
+            from: formatDateOnly(firstDeadline, locale),
+            to: formatDateOnly(lastDeadline, locale),
+          });
 
   const counts = claims.reduce(
     (acc, c) => {
@@ -136,29 +153,41 @@ export default async function SourcePage({
             <div>
               <p className="label mb-1.5">{t("trust")}</p>
               <p className="tnum text-[30px] font-semibold leading-none tracking-[-0.02em]">
-                {formatFixed(source.score, locale)}
+                {rated ? formatFixed(source.score, locale) : common("unavailable")}
+              </p>
+              {!rated && (
+                <p className="mt-1.5 text-[11px] text-ink-3">
+                  {common("needed", { done: adjudicated, need: MIN_SAMPLE })}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="label mb-1.5">{t("sample")}</p>
+              <p className="text-[13px] leading-relaxed text-ink-2">
+                <span className="tnum">{formatCount(source.hits, locale)}</span> {t("hit")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(source.misses, locale)}</span> {t("miss")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(counts.void, locale)}</span> {t("void")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(counts.pending, locale)}</span> {t("pending")}
               </p>
             </div>
             <div>
-              <p className="label mb-1.5">{t("record")}</p>
-              <p className="tnum text-[16px] leading-none text-ink-2">
-                {formatCount(source.hits, locale)}
-                <span className="text-ink-3"> {t("hit")} </span>
-                {formatCount(source.misses, locale)}
-                <span className="text-ink-3"> {t("miss")}</span>
-              </p>
+              <p className="label mb-1.5">{t("window")}</p>
+              <p className="tnum text-[13px] leading-relaxed text-ink-2">{windowLabel}</p>
             </div>
             <div>
               <p className="label mb-1.5">{t("hitRate")}</p>
               <p className="tnum text-[16px] leading-none text-ink-2">
-                {hitRate === null ? "—" : formatPercent(hitRate, locale)}
+                {hitRate === null ? common("unavailable") : formatPercent(hitRate, locale)}
               </p>
             </div>
           </div>
         </div>
 
         <div className="mt-6">
-          <TrustMeter score={source.score} band={band} />
+          <TrustMeter score={source.score} band={band} rated={rated} />
           <div className="mt-2 flex justify-between text-[11px] text-ink-3">
             <span>{t("mute", { value: formatFixed(TRUST_MUTED, locale) })}</span>
             <span>{t("trustMark", { value: formatFixed(TRUST_TRUSTED, locale) })}</span>

@@ -39,11 +39,14 @@ export async function TrustMeter({
   band,
   size = "md",
   showMarks = true,
+  rated = true,
 }: {
   score: number;
   band: TrustBand;
   size?: "sm" | "md";
   showMarks?: boolean;
+  /** False until three claims are adjudicated. The track stays; the fill does not pretend the bound is a score. */
+  rated?: boolean;
 }) {
   const t = await getTranslations("band");
   const lang = await locale();
@@ -52,13 +55,19 @@ export async function TrustMeter({
   return (
     <div
       className="meter-track w-full"
-      title={t("meterTitle", { score: formatFixed(score, lang), band: t(band) })}
+      title={
+        rated
+          ? t("meterTitle", { score: formatFixed(score, lang), band: t(band) })
+          : t("unknown")
+      }
     >
       <div className="meter" style={{ height: h, borderRadius: h / 2 }}>
-        <div
-          className={`fill ${FILL[band]}`}
-          style={{ width: `${pct}%`, borderRadius: h / 2 }}
-        />
+        {rated && (
+          <div
+            className={`fill ${FILL[band]}`}
+            style={{ width: `${pct}%`, borderRadius: h / 2 }}
+          />
+        )}
       </div>
       {showMarks && (
         <>
@@ -85,25 +94,28 @@ export async function TrustReadout({
   hits,
   misses,
   compact = false,
+  rated = true,
 }: {
   score: number;
   band: TrustBand;
   hits: number;
   misses: number;
   compact?: boolean;
+  rated?: boolean;
 }) {
   const t = await getTranslations("band");
+  const common = await getTranslations("common");
   const lang = await locale();
   const adjudicated = hits + misses;
   return (
     <span className="inline-flex items-baseline gap-2">
       <span className="tnum text-[15px] font-medium tracking-[-0.01em]">
-        {formatFixed(score, lang)}
+        {rated ? formatFixed(score, lang) : common("unavailable")}
       </span>
       <span className={`text-[11px] ${BAND_TEXT[band]}`}>{t(band)}</span>
-      {!compact && (
+      {!compact && rated && (
         <span className="text-[11px] text-ink-3 tnum">
-          {formatCount(hits, lang)}/{formatCount(adjudicated || 0, lang)}
+          {formatCount(hits, lang)}/{formatCount(adjudicated, lang)}
         </span>
       )}
     </span>

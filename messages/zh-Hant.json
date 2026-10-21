@@ -4,6 +4,11 @@
     "description": "來源提出陳述。Walkback 對照 Sui 主網查核，把說錯的往下排。",
     "ogTitle": "Walkback — 我們留著收據"
   },
+  "common": {
+    "disclaimer": "Walkback 拿鏈上資料查核公開陳述。分數低，表示我們查得到的那些陳述沒有成立——不是說這個人不誠實。分數只涵蓋這本帳本裡的陳述，不是整個帳號。",
+    "unavailable": "—",
+    "needed": "{done, number}/{need, number} 才評分"
+  },
   "nav": {
     "feed": "動態",
     "ingest": "收錄",
@@ -60,7 +65,6 @@
     "apiDown": "連不到 API",
     "apiHintBefore": "請把",
     "apiHintAfter": "設成 Coolify API 的網址，或確認 API 容器運作正常。",
-    "judged": "{done, number}/{need, number} 已裁決",
     "openPost": "開啟原始貼文",
     "due": "截止 {date}",
     "synthetic": "示範用",
@@ -209,6 +213,9 @@
     "hit": "命中",
     "miss": "未中",
     "hitRate": "命中率",
+    "sample": "樣本",
+    "window": "查核區間",
+    "windowRange": "{from} – {to}",
     "mute": "靜音 {value}",
     "trustMark": "信任 {value}",
     "belowMin": "還沒到 {count, number} 則的最低樣本。一兩則全對還不算證據——lower bound 要編碼的就是這件事，所以還沒有分級。",

@@ -13,7 +13,7 @@
  */
 import { getLocale, getTranslations } from "next-intl/server";
 import { apiGet } from "@/lib/public-api";
-import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
+import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, scoreIsShown, sourceIsMuted, trustBand } from "@/lib/score";
 import { formatCount, formatDateOnly, formatFixed } from "@/lib/locale-format";
 import { isLocale, type Locale } from "@/lib/locale";
 import VerdictBadge from "@/components/verdict-badge";
@@ -52,6 +52,7 @@ export const dynamic = "force-dynamic";
 
 export default async function FeedPage() {
   const t = await getTranslations("feed");
+  const common = await getTranslations("common");
   const locale = await uiLocale();
   let rows: FeedRow[] = [];
   let loadError: string | null = null;
@@ -61,7 +62,9 @@ export default async function FeedPage() {
     loadError = err instanceof Error ? err.message : String(err);
   }
 
-  const visible = rows.filter((r) => !r.source.muted);
+  const visible = rows.filter(
+    (r) => !sourceIsMuted(r.source.muted, r.source.hits + r.source.misses),
+  );
   const hidden = rows.length - visible.length;
   const pending = visible.filter((r) => r.claim.status === "pending").length;
   const resolved = visible.length - pending;
@@ -128,6 +131,8 @@ export default async function FeedPage() {
         </div>
       </section>
 
+      <p className="mb-6 max-w-[68ch] text-[13px] leading-relaxed text-ink-2">{common("disclaimer")}</p>
+
       {/* ── Rows ───────────────────────────────────────────────────────── */}
       {loadError ? (
         <div className="rounded-xl border border-false/30 bg-false/5 p-5">
@@ -145,6 +150,7 @@ export default async function FeedPage() {
           {visible.map(({ claim, source }, i) => {
             const adjudicated = source.hits + source.misses;
             const band = trustBand(source.score, adjudicated);
+            const rated = scoreIsShown(adjudicated);
 
             return (
               <li
@@ -171,10 +177,11 @@ export default async function FeedPage() {
                         band={band}
                         hits={source.hits}
                         misses={source.misses}
+                        rated={rated}
                       />
-                      {adjudicated < MIN_SAMPLE && (
+                      {!rated && (
                         <span className="text-[11px] text-ink-3">
-                          {t("judged", { done: adjudicated, need: MIN_SAMPLE })}
+                          {common("needed", { done: adjudicated, need: MIN_SAMPLE })}
                         </span>
                       )}
 
@@ -236,7 +243,7 @@ export default async function FeedPage() {
                   {/* Trust spine */}
                   <div className="hidden w-32 shrink-0 flex-col justify-center gap-2 border-l border-line px-4 sm:flex">
                     <span className="label">{t("trust")}</span>
-                    <TrustMeter score={source.score} band={band} size="sm" />
+                    <TrustMeter score={source.score} band={band} size="sm" rated={rated} />
                   </div>
                 </div>
               </li>

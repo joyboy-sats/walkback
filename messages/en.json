@@ -4,6 +4,11 @@
     "description": "Sources make claims. Walkback checks them against Sui mainnet and demotes the ones that get it wrong.",
     "ogTitle": "Walkback — we keep the receipts"
   },
+  "common": {
+    "disclaimer": "Walkback audits public claims against onchain data. A low score means the claims we could check did not hold — not that the person is dishonest. Scores cover only the claims in this ledger, not the whole account.",
+    "unavailable": "—",
+    "needed": "{done, number}/{need, number} needed"
+  },
   "nav": {
     "feed": "Feed",
     "ingest": "Ingest",
@@ -60,7 +65,6 @@
     "apiDown": "API unreachable",
     "apiHintBefore": "Set",
     "apiHintAfter": "to the Coolify API origin, or check that the API container is healthy.",
-    "judged": "{done, number}/{need, number} judged",
     "openPost": "Open the original post",
     "due": "due {date}",
     "synthetic": "synthetic",
@@ -209,6 +213,9 @@
     "hit": "hit",
     "miss": "miss",
     "hitRate": "hit rate",
+    "sample": "sample",
+    "window": "verification window",
+    "windowRange": "{from} – {to}",
     "mute": "mute {value}",
     "trustMark": "trust {value}",
     "belowMin": "Below the {count, number}-claim minimum. A perfect record on one or two claims is not evidence yet — that is exactly what the lower bound encodes, and why no band is assigned.",

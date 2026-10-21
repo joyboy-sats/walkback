@@ -22,6 +22,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const locale = await getLocale();
   const t = await getTranslations("nav");
   const footer = await getTranslations("footer");
+  const common = await getTranslations("common");
   const nav = [
     { href: "/", label: t("feed") },
     { href: "/ingest", label: t("ingest") },
@@ -62,7 +63,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
 
           <footer className="mx-auto mt-16 max-w-5xl px-6 pb-14">
-            <div className="rule flex flex-col gap-2 pt-5 text-[12px] text-ink-3 sm:flex-row sm:items-baseline">
+            <p className="max-w-[68ch] text-[12px] leading-relaxed text-ink-3">{common("disclaimer")}</p>
+            <div className="rule mt-4 flex flex-col gap-2 pt-5 text-[12px] text-ink-3 sm:flex-row sm:items-baseline">
               <span>{footer("record")}</span>
               <span className="sm:ml-auto">{footer("bound")}</span>
             </div>

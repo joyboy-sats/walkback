@@ -4,6 +4,7 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "./db";
 import { LIST_ENUMERATION_NOTE } from "./projection-rebuild";
+import { sourceIsMuted } from "./score";
 
 export async function readFeed() {
   const db = getDb();
@@ -34,7 +35,7 @@ export async function readFeed() {
       score: source.score,
       hits: source.hits,
       misses: source.misses,
-      muted: source.muted,
+      muted: sourceIsMuted(source.muted, source.hits + source.misses),
     },
   }));
 }
