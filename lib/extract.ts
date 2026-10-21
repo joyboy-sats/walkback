@@ -17,9 +17,22 @@
  */
 import "server-only";
 
-import { generateObject } from "ai";
+import { generateObject, NoObjectGeneratedError, type LanguageModel } from "ai";
 import { z } from "zod";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
+
+/**
+ * Gateway id whose listed name is "DeepSeek V4.1 Flash"
+ * (GET https://ai-gateway.vercel.sh/v1/models). Not a secret.
+ * Dated snapshots (`-1017`) and the `-fast` tier are different models.
+ */
+export const DEFAULT_EXTRACT_MODEL = "deepseek/deepseek-v4.1-flash";
+
+/** Blank or missing `EXTRACT_MODEL` keeps the DeepSeek V4.1 Flash default. */
+export function extractModelId(env: Record<string, string | undefined> = process.env): LanguageModel {
+  const configured = env.EXTRACT_MODEL?.trim();
+  return configured && configured.length > 0 ? configured : DEFAULT_EXTRACT_MODEL;
+}
 
 const claimTypes = [
   "balance_threshold",
@@ -92,6 +105,34 @@ amount is always a decimal string in base units (mist for SUI) for balance
 claims, and a decimal price string for price claims. asset is a coin type such
 as "0x2::sui::SUI".`;
 
+type ClaimDraft = z.infer<typeof schema>["claims"][number];
+
+/**
+ * Pull a JSON object out of a model reply that wrapped it in prose or a
+ * fence, then keep it only when it satisfies the same zod schema
+ * `generateObject` uses. Returns null when nothing in the text is usable.
+ */
+export function repairClaimsJson(text: string): string | null {
+  const trimmed = text.trim();
+  const candidates: string[] = [];
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fence?.[1]) candidates.push(fence[1].trim());
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) candidates.push(trimmed.slice(start, end + 1));
+
+  for (const candidate of candidates) {
+    if (candidate === trimmed) continue;
+    try {
+      const parsed = schema.safeParse(JSON.parse(candidate));
+      if (parsed.success) return JSON.stringify(parsed.data);
+    } catch {
+      // The next span may be the object.
+    }
+  }
+  return null;
+}
+
 export interface ExtractionInput {
   handle: string;
   /** Known address for the source, used to fill params.address when the text omits it. */
@@ -116,15 +157,36 @@ export async function extractClaims(input: ExtractionInput): Promise<ExtractedCl
     '"""',
   ].join("\n");
 
-  const { object } = await generateObject({
-    model: "anthropic/claude-sonnet-4-5",
-    schema,
-    system: SYSTEM,
-    prompt: user,
-  });
+  // V4 Flash thinks by default, and thinking tokens are billed as output.
+  // Extraction is a schema fill, so thinking stays off. That also lets
+  // temperature apply. `sort: "cost"` prefers the cheap provider: the model
+  // list marks the price as varying, and the US regional price is higher.
+  let claims: ClaimDraft[];
+  try {
+    const { object } = await generateObject({
+      model: extractModelId(),
+      schema,
+      schemaName: "ExtractedClaims",
+      schemaDescription: "Machine-checkable claims from one post. An empty claims array is valid.",
+      system: SYSTEM,
+      prompt: user,
+      temperature: 0,
+      experimental_repairText: async ({ text }) => repairClaimsJson(text),
+      providerOptions: {
+        gateway: { sort: "cost" },
+        deepseek: { thinking: { type: "disabled" } },
+      },
+    });
+    claims = object.claims;
+  } catch (err) {
+    // The model answered, but the text still is not the schema. That is an
+    // empty extraction, not a job failure. Auth and network errors rethrow.
+    if (NoObjectGeneratedError.isInstance(err)) return [];
+    throw err;
+  }
 
   const out: ExtractedClaim[] = [];
-  for (const c of object.claims) {
+  for (const c of claims) {
     if (c.confidence < MIN_CONFIDENCE) continue;
     const type = c.claim_type as ClaimType;
     // A claim whose params cannot be validated is worse than no claim: it would
