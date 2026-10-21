@@ -81,7 +81,7 @@ export function claimMemory(
   },
   extracted: ExtractedClaim,
   snapshot: BalanceSnapshot | null,
-  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string },
+  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string; deadlineBasis?: string },
 ): { text: string; key: string } {
   const snapLine = snapshot
     ? `At ingest, ${snapshot.address} held ${snapshot.balance} base units of ` +
@@ -95,6 +95,7 @@ export function claimMemory(
     ? `SYNTHETIC demo fallback — this is not a real post and must not be counted as evidence. `
     : "";
   const sourceLine = opts?.sourceUrl ? `Original post: ${opts.sourceUrl}. ` : "";
+  const basisLine = opts?.deadlineBasis ? `Deadline basis: ${opts.deadlineBasis}. ` : "";
 
   return {
     key: `claim:${claim.id}`,
@@ -103,6 +104,7 @@ export function claimMemory(
       `"${clip(extracted.quote)}"\n\n` +
       `${syntheticLine}` +
       `${sourceLine}` +
+      `${basisLine}` +
       `Recorded as a ${claim.claimType} claim with ${claim.confidence.toFixed(2)} ` +
       `extraction confidence. ${snapLine}\n\n` +
       payload({
@@ -118,6 +120,7 @@ export function claimMemory(
         synthetic: opts?.synthetic === true,
         ...(opts?.externalId ? { external_id: opts.externalId } : {}),
         ...(opts?.sourceUrl ? { source_url: opts.sourceUrl } : {}),
+        ...(opts?.deadlineBasis ? { deadline_basis: opts.deadlineBasis } : {}),
       }),
   };
 }

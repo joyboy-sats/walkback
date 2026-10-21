@@ -137,6 +137,7 @@ export async function resolveClaim(
         params: claim.params as unknown as ClaimParams,
         snapshot,
         deadline: claim.deadline.toISOString(),
+        deadlineBasis: claim.deadlineBasis,
       },
       now,
     ));
@@ -387,6 +388,12 @@ export async function persistClaimMemories(claimId: string): Promise<string | un
       confidence: row.claim.confidence,
     },
     (row.claim.snapshot as BalanceSnapshot | null) ?? null,
+    {
+      synthetic: row.claim.synthetic,
+      ...(row.claim.externalId ? { externalId: row.claim.externalId } : {}),
+      ...(row.claim.sourceUrl ? { sourceUrl: row.claim.sourceUrl } : {}),
+      ...(row.claim.deadlineBasis ? { deadlineBasis: row.claim.deadlineBasis } : {}),
+    },
   );
 
   const write = { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };

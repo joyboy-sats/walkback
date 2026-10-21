@@ -22,11 +22,11 @@ remains is mostly surface area, seed data, and the submission artefacts.
 
 **Blocks that need a human, not an agent**
 
-- `TATUM_API_KEY` has never been exercised. `price_threshold` is priced by
-  Tatum `getRate` (`/v4/data/rate/symbol`), not CoinGecko. Support for
-  `symbol=SUI` (the six seeded price claims are all SUI/USD) is unverified;
-  the endpoint needs auth. An unsupported pair resolves `void` and does not
-  move the score.
+- `price_threshold` is judged from Tatum historical USD candles
+  (`/v4/data/rate/symbol/OHLCV` and the batch route), not the spot rate.
+  Hourly first, daily when hourly cannot be requested. An unsupported symbol
+  or a gap resolves `void` and does not move the score. The six seeded price
+  claims are touches and stay pending until their deadlines.
 - `AI_GATEWAY_API_KEY` is unset, so extraction has never run.
 - `DATABASE_URL` is unset, so the projection has never been created.
 - `MEMWAL_AGENT_ID` is assumed to be the delegate public key. Unconfirmed.
@@ -104,9 +104,10 @@ collected 2026-10-20 (SGT): 17 posts, 17 claims, 7 handles. None are synthetic.
   so ingest does not read a live balance. The post whose quote says
   `From: 0x1ae70480` while the stored address differed is omitted; it had no
   other claim.
-- 6 `price_threshold` claims, every one `SUI`/`USD`. Deadlines are
-  2026-10-30 and 2026-11-08, so the seed leaves them pending. Pricing is
-  Tatum `getRate`. SUI/USD support is unverified.
+- 6 `price_threshold` claims, every one `SUI`/`USD` and `evaluation: touch`.
+  Deadlines are 2026-10-30 and 2026-11-08, so the seed leaves them pending.
+  `since` is the post's `published_at`. `deadline_basis` records who chose
+  the deadline. Pricing is Tatum hourly (then daily) OHLCV, not the spot rate.
 - `@mysqlsui` and both `balance_threshold` claims are omitted.
 - Each post keeps `source_url`. The feed links to it.
 

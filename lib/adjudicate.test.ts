@@ -22,14 +22,16 @@ vi.mock("./tatum", () => {
   return {
     TatumError,
     getBalance: vi.fn(),
-    getRate: vi.fn(),
+    getOhlcvAt: vi.fn(),
+    getOhlcvPage: vi.fn(),
     netChangeInWindow: vi.fn(),
   };
 });
 
 import { adjudicate, type AdjudicationInput } from "./adjudicate";
+import { INTERVAL_MS, type PriceCandle } from "./price-candle";
 import { applyOutcome, computeScore } from "./score";
-import { getBalance, getRate, netChangeInWindow, TatumError } from "./tatum";
+import { getBalance, getOhlcvAt, getOhlcvPage, netChangeInWindow, TatumError } from "./tatum";
 import type { Verdict } from "./types";
 
 const NOW = new Date("2026-10-20T00:00:00.000Z");
@@ -52,7 +54,8 @@ function expectVoidLeavesScore(verdict: Verdict) {
 describe("adjudicate voids", () => {
   beforeEach(() => {
     vi.mocked(getBalance).mockReset();
-    vi.mocked(getRate).mockReset();
+    vi.mocked(getOhlcvAt).mockReset();
+    vi.mocked(getOhlcvPage).mockReset();
     vi.mocked(netChangeInWindow).mockReset();
   });
 
@@ -107,7 +110,7 @@ describe("adjudicate voids", () => {
   });
 
   it("voids a price claim when the rate pair is unsupported", async () => {
-    vi.mocked(getRate).mockResolvedValue(undefined);
+    vi.mocked(getOhlcvAt).mockResolvedValue(undefined);
 
     const verdict = await adjudicate(
       input({
@@ -121,6 +124,137 @@ describe("adjudicate voids", () => {
 
     expectVoidLeavesScore(verdict);
     expect(verdict.reason.toLowerCase()).toMatch(/does not cover|unsupported/);
+    expect(getOhlcvAt).toHaveBeenCalledWith("SUI", PAST, "1h");
+    expect(getOhlcvPage).not.toHaveBeenCalled();
+  });
+
+  it("judges a past deadline against that deadline, not against when the worker runs", async () => {
+    const open = Date.parse("2024-06-01T00:00:00.000Z");
+    vi.mocked(getOhlcvAt).mockResolvedValue(hourCandle(open, 1.4, 1.1, 1.25, "SOL"));
+
+    const first = await adjudicate(
+      input({
+        claimType: "price_threshold",
+        params: { symbol: "SOL", quote: "USD", direction: "gte", amount: "1.2", evaluation: "at_deadline" },
+        snapshot: null,
+        deadline: "2024-06-01T00:00:00.000Z",
+        deadlineBasis: "stated in post",
+      }),
+      NOW,
+    );
+    const later = await adjudicate(
+      input({
+        claimType: "price_threshold",
+        params: { symbol: "SOL", quote: "USD", direction: "gte", amount: "1.2", evaluation: "at_deadline" },
+        snapshot: null,
+        deadline: "2024-06-01T00:00:00.000Z",
+      }),
+      new Date("2027-01-01T00:00:00.000Z"),
+    );
+
+    expect(first.outcome).toBe("true");
+    expect(later.outcome).toBe("true");
+    expect(first.reason).toBe(later.reason);
+    expect(first.reason).toContain("Tatum SOL/USD 1h open was 1.25");
+    expect(first.reason).toContain("2024-06-01T00:00:00.000Z");
+    expect(first.evidence).toMatchObject({
+      source: "tatum:/v4/data/rate/symbol/OHLCV",
+      interval: "1h",
+      deadlineBasis: "stated in post",
+      extreme: { value: 1.25, field: "open", at: "2024-06-01T00:00:00.000Z" },
+    });
+    for (const call of vi.mocked(getOhlcvAt).mock.calls) {
+      expect(call[1]).toBe("2024-06-01T00:00:00.000Z");
+    }
+  });
+
+  it("treats a stored price claim with no evaluation as the deadline print", async () => {
+    const open = Date.parse(PAST);
+    vi.mocked(getOhlcvAt).mockResolvedValue(hourCandle(open, 2, 1, 1.5, "BTC"));
+
+    const verdict = await adjudicate(
+      input({
+        claimType: "price_threshold",
+        params: { symbol: "BTC", quote: "USD", direction: "lte", amount: "1.4" },
+        snapshot: null,
+        deadline: PAST,
+      }),
+      NOW,
+    );
+
+    expect(verdict.outcome).toBe("false");
+    expect(verdict.reason.toLowerCase()).toContain("no evaluation was stored");
+    expect(verdict.evidence).toMatchObject({ evaluation: "at_deadline", evaluationDefaulted: true });
+    expect(getOhlcvPage).not.toHaveBeenCalled();
+  });
+
+  it("checks a touch against the window high and ignores the clock", async () => {
+    const since = "2026-09-01T00:00:00.000Z";
+    const deadline = "2026-09-01T03:00:00.000Z";
+    vi.mocked(getOhlcvPage).mockImplementation(async (_symbol, from) => {
+      const start = Date.parse(from);
+      if (start > Date.parse(since)) return [];
+      return [0, 1, 2].map((i) =>
+        hourCandle(Date.parse(since) + i * INTERVAL_MS["1h"], i === 1 ? 2.4 : 1.2, 1, 1, "ETH"),
+      );
+    });
+
+    const params = {
+      symbol: "ETH",
+      quote: "USD",
+      direction: "gte" as const,
+      amount: "2",
+      evaluation: "touch" as const,
+      since,
+    };
+    const early = await adjudicate(
+      input({ claimType: "price_threshold", params, snapshot: null, deadline }),
+      new Date("2026-09-02T00:00:00.000Z"),
+    );
+    const late = await adjudicate(
+      input({ claimType: "price_threshold", params, snapshot: null, deadline }),
+      new Date("2027-04-01T00:00:00.000Z"),
+    );
+
+    expect(early.outcome).toBe("true");
+    expect(late.outcome).toBe(early.outcome);
+    expect(late.reason).toBe(early.reason);
+    expect(early.reason).toContain("1h high was 2.4");
+    expect(early.reason).toContain(since);
+    expect(early.evidence).toMatchObject({
+      interval: "1h",
+      window: { from: since, to: deadline },
+      extreme: { field: "high", value: 2.4 },
+    });
+    expect(getOhlcvAt).not.toHaveBeenCalled();
+  });
+
+  it("voids a touch that has no publish time, and a price quote other than USD", async () => {
+    const missingStart = await adjudicate(
+      input({
+        claimType: "price_threshold",
+        params: { symbol: "SUI", quote: "USD", direction: "gte", amount: "2", evaluation: "touch" },
+        snapshot: null,
+        deadline: PAST,
+      }),
+      NOW,
+    );
+    expectVoidLeavesScore(missingStart);
+    expect(missingStart.reason.toLowerCase()).toContain("published");
+    expect(getOhlcvPage).not.toHaveBeenCalled();
+
+    const eur = await adjudicate(
+      input({
+        claimType: "price_threshold",
+        params: { symbol: "SUI", quote: "EUR", direction: "gte", amount: "2", evaluation: "at_deadline" },
+        snapshot: null,
+        deadline: PAST,
+      }),
+      NOW,
+    );
+    expectVoidLeavesScore(eur);
+    expect(eur.reason).toContain("USD");
+    expect(getOhlcvAt).not.toHaveBeenCalled();
   });
 
   it("voids a truncated transaction replay, because a floor is not a verdict", async () => {
@@ -207,4 +341,19 @@ describe("adjudicate voids", () => {
 
 function input(partial: AdjudicationInput): AdjudicationInput {
   return partial;
+}
+
+function hourCandle(openMs: number, high: number, low: number, open = low, symbol = "SUI"): PriceCandle {
+  const closeTimeMs = openMs + INTERVAL_MS["1h"] - 1;
+  return {
+    symbol,
+    openTimeMs: openMs,
+    closeTimeMs,
+    openTime: new Date(openMs).toISOString(),
+    closeTime: new Date(closeTimeMs).toISOString(),
+    open,
+    high,
+    low,
+    close: (high + low) / 2,
+  };
 }

@@ -24,6 +24,12 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { withRetry } from "./bounded";
 import { env, isReplay } from "./env";
+import {
+  parseTatumCandle,
+  parseTatumCandles,
+  type PriceCandle,
+  type PriceInterval,
+} from "./price-candle";
 import { RateLimiter } from "./ratelimit";
 
 /** ~3 req/s on the free tier; kept at 2.5 to leave headroom. */
@@ -597,6 +603,126 @@ async function requestRate(
 
   const body = (await res.json()) as { value?: number } | null;
   return typeof body?.value === "number" ? body.value : undefined;
+}
+
+/**
+ * Query value for `time` and `timeFrom`.
+ *
+ * Tatum rejects epoch milliseconds. A live call with
+ * `time=1760000000000` returned HTTP 400
+ * `time must be a Date instance`. The same route with
+ * `time=2025-10-09T08:00:00Z` returned the SUI candle. `timeFrom` on the
+ * batch route is sent the same way. Whole seconds drop the `.000` so the
+ * wire value matches that call.
+ */
+export function ohlcvQueryTime(ms: number): string {
+  if (!Number.isFinite(ms)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  const iso = new Date(ms).toISOString().replace(/\.000Z$/, "Z");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(iso)) {
+    throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  }
+  return iso;
+}
+
+/**
+ * One historical USD candle from GET /v4/data/rate/symbol/OHLCV.
+ *
+ * The endpoint returns the nearest candle when the requested time is outside
+ * its history. A candle that does not contain `atIso` is `null`, not a price.
+ * `undefined` is an unsupported symbol (HTTP 404). Quote is USD; there is no
+ * basePair on this route. 50 credits per call. `time` is an ISO-8601 UTC
+ * string from `ohlcvQueryTime`.
+ */
+export async function getOhlcvAt(
+  symbol: string,
+  atIso: string,
+  interval: PriceInterval,
+): Promise<PriceCandle | null | undefined> {
+  const atMs = Date.parse(atIso);
+  if (Number.isNaN(atMs)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  const key = `ohlcv-${symbol.toUpperCase()}-${interval}-${atMs}`;
+  const time = ohlcvQueryTime(atMs);
+  const raw = await ohlcvRequest(key, (url) => {
+    const endpoint = new URL(url);
+    endpoint.searchParams.set("symbol", symbol);
+    endpoint.searchParams.set("time", time);
+    endpoint.searchParams.set("interval", interval);
+    return endpoint.toString();
+  }, "at");
+  if (raw === undefined) return undefined;
+  const candle = parseTatumCandle(raw);
+  if (!candle) throw new TatumError("ohlcv response was not a candle", undefined, "ohlcv");
+  // Nearest-candle replies are not a price for `at`. closeTime in the published
+  // payload is the last millisecond inside the bucket, so it is inclusive here.
+  // The history layer still requires the bucket width to match `interval`.
+  if (atMs < candle.openTimeMs || atMs > candle.closeTimeMs) return null;
+  return candle;
+}
+
+/**
+ * Candles with openTime ≥ `fromIso`, oldest first, from
+ * GET /v4/data/rate/symbol/OHLCV/batch. At most 50 per call. 500 credits.
+ * `undefined` means the symbol is not on the feed.
+ */
+export async function getOhlcvPage(
+  symbol: string,
+  fromIso: string,
+  interval: PriceInterval,
+  limit: number,
+): Promise<PriceCandle[] | undefined> {
+  const fromMs = Date.parse(fromIso);
+  if (Number.isNaN(fromMs)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  const size = Math.min(50, Math.max(1, Math.floor(limit)));
+  const key = `ohlcv-batch-${symbol.toUpperCase()}-${interval}-${fromMs}-${size}`;
+  const timeFrom = ohlcvQueryTime(fromMs);
+  const raw = await ohlcvRequest(key, (url) => {
+    const endpoint = new URL(url);
+    endpoint.searchParams.set("symbol", symbol);
+    endpoint.searchParams.set("timeFrom", timeFrom);
+    endpoint.searchParams.set("numberOfCandles", String(size));
+    endpoint.searchParams.set("interval", interval);
+    return endpoint.toString();
+  }, "batch");
+  if (raw === undefined) return undefined;
+  const candles = parseTatumCandles(raw);
+  if (!candles) throw new TatumError("ohlcv batch response was not a candle list", undefined, "ohlcv");
+  return candles;
+}
+
+/**
+ * `undefined` is a 404 (symbol not covered). Other failures throw.
+ * The URL is the configured endpoint; only the query string is added.
+ */
+async function ohlcvRequest(
+  fixtureKey: string,
+  buildUrl: (endpoint: string) => string,
+  kind: "at" | "batch",
+): Promise<unknown> {
+  if (isReplay()) return readFixture<unknown>(fixtureKey);
+
+  const e = env();
+  if (!e.TATUM_API_KEY) throw new TatumError("TATUM_API_KEY is not set", undefined, "ohlcv");
+  const endpoint = kind === "at" ? e.TATUM_OHLCV_URL : e.TATUM_OHLCV_BATCH_URL;
+
+  return withRetry(() => requestOhlcv(e.TATUM_API_KEY!, buildUrl(endpoint), fixtureKey), {
+    attempts: RATE_ATTEMPTS,
+    backoffMs: RATE_BACKOFF_MS,
+  });
+}
+
+async function requestOhlcv(apiKey: string, url: string, fixtureKey: string): Promise<unknown> {
+  await rpcLimiter.acquire();
+  const res = await fetch(url, {
+    headers: { accept: "application/json", "x-api-key": apiKey },
+    signal: AbortSignal.timeout(RATE_TIMEOUT_MS),
+  });
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new TatumError(`ohlcv http ${res.status}`, res.status, "ohlcv");
+  const body: unknown = await res.json();
+  if (env().DEMO_MODE === "live" && process.env.CAPTURE_FIXTURES === "1") {
+    await writeFixture(fixtureKey, body);
+  }
+  return body;
 }
 
 // ── Internals ────────────────────────────────────────────────────────────────

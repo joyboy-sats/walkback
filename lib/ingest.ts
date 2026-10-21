@@ -272,6 +272,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
         status: "pending" as const,
         synthetic,
         sourceUrl: input.sourceUrl ?? null,
+        deadlineBasis: c.deadlineBasis ?? null,
       };
     });
     if (input.externalId) {
@@ -296,6 +297,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
           synthetic,
           externalId: null,
           sourceUrl: input.sourceUrl ?? null,
+          deadlineBasis: c.deadlineBasis ?? null,
           snapshot: snapshot as unknown as Record<string, unknown> | null,
           walrusBlobId: null,
         };
@@ -355,6 +357,7 @@ const claimColumns = {
   synthetic: schema.claims.synthetic,
   externalId: schema.claims.externalId,
   sourceUrl: schema.claims.sourceUrl,
+  deadlineBasis: schema.claims.deadlineBasis,
   snapshot: schema.claims.snapshot,
   walrusBlobId: schema.claims.walrusBlobId,
 };
@@ -370,6 +373,7 @@ interface ClaimRow {
   synthetic: boolean;
   externalId: string | null;
   sourceUrl: string | null;
+  deadlineBasis: string | null;
   snapshot: Record<string, unknown> | null;
   walrusBlobId: string | null;
 }
@@ -485,6 +489,7 @@ async function resumeSeedPost(
             status: "pending" as const,
             synthetic: input.synthetic === true,
             sourceUrl: input.sourceUrl ?? null,
+            deadlineBasis: c.deadlineBasis ?? null,
           };
         }),
       )
@@ -553,6 +558,7 @@ function claimWrite(row: ClaimRow, handle: string, snapshot: BalanceSnapshot | n
       synthetic: row.synthetic,
       ...(row.externalId ? { externalId: row.externalId } : {}),
       ...(row.sourceUrl ? { sourceUrl: row.sourceUrl } : {}),
+      ...(row.deadlineBasis ? { deadlineBasis: row.deadlineBasis } : {}),
     },
   );
   return { text: mem.text, namespace: NS.claim, idempotencyKey: mem.key };

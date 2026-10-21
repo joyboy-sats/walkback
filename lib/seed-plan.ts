@@ -12,6 +12,7 @@
  */
 import { z } from "zod";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
+import { priceParamsFromRaw } from "./price-candle";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
 
 /** Matches `writeMemoriesBulk`'s server cap. A seed batch must not exceed it. */
@@ -38,6 +39,11 @@ const claimSchema = z.object({
   claim_type: z.enum(claimTypes),
   params: z.record(z.string(), z.union([z.string(), z.number()])),
   deadline: z.string().datetime(),
+  /**
+   * Why `deadline` is that timestamp. Required on price claims. The resolver
+   * does not derive a deadline from this string.
+   */
+  deadline_basis: z.string().min(1).max(160).optional(),
   confidence: z.number().min(0).max(1),
 });
 
@@ -274,11 +280,17 @@ export function materializeClaims(post: SeedPost): ExtractedClaim[] | null {
         `post ${post.id} claim ${index} (${c.claim_type}) is missing a field it needs to be checkable`,
       );
     }
+    if (c.claim_type === "price_threshold" && !c.deadline_basis?.trim()) {
+      throw new Error(
+        `post ${post.id} claim ${index} is a price claim and needs deadline_basis`,
+      );
+    }
     return {
       quote: c.quote,
       claimType: c.claim_type,
       params,
       deadline: new Date(c.deadline).toISOString(),
+      ...(c.deadline_basis?.trim() ? { deadlineBasis: c.deadline_basis.trim() } : {}),
       confidence: c.confidence,
     };
   });
@@ -397,15 +409,15 @@ function normalize(
       };
     }
     case "price_threshold": {
-      const symbol = str("symbol");
-      const amount = str("amount");
-      if (!symbol || !amount || Number.isNaN(Number(amount)) || !direction) return null;
-      return {
-        symbol: symbol.toUpperCase(),
-        quote: (str("quote") || "USD").toUpperCase(),
-        direction,
-        amount,
-      };
+      return priceParamsFromRaw({
+        symbol: str("symbol"),
+        quote: str("quote"),
+        ...(direction ? { direction } : {}),
+        amount: str("amount"),
+        evaluation: str("evaluation"),
+        since: str("since"),
+        publishedAt: post.published_at,
+      });
     }
     case "manual":
       return { note: str("note") || "no detail provided" };

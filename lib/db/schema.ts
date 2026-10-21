@@ -115,6 +115,11 @@ export const claims = pgTable(
      * The feed and the source page render it when it is an https URL.
      */
     sourceUrl: text("source_url"),
+    /**
+     * Why `deadline` is that timestamp. Null on rows written before the field
+     * existed. The resolver does not read it to choose a time.
+     */
+    deadlineBasis: text("deadline_basis"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     walrusBlobId: text("walrus_blob_id"),
   },

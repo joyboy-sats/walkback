@@ -199,6 +199,7 @@ export interface RebuiltClaim {
   synthetic: boolean;
   externalId: string | null;
   sourceUrl: string | null;
+  deadlineBasis: string | null;
   walrusBlobId: string;
   createdAt: string;
 }
@@ -1328,6 +1329,7 @@ async function applyProjection(p: Projection): Promise<void> {
           synthetic: c.synthetic,
           externalId: c.externalId,
           sourceUrl: c.sourceUrl,
+          deadlineBasis: c.deadlineBasis,
           createdAt: new Date(c.createdAt),
           walrusBlobId: c.walrusBlobId,
         })),
@@ -1503,6 +1505,10 @@ function addClaim(
     synthetic: payload.synthetic === true,
     externalId: typeof payload.external_id === "string" ? payload.external_id : null,
     sourceUrl: typeof payload.source_url === "string" ? payload.source_url : null,
+    deadlineBasis:
+      typeof payload.deadline_basis === "string" && payload.deadline_basis.trim()
+        ? payload.deadline_basis.trim().slice(0, 160)
+        : null,
     walrusBlobId: mem.blobId,
     createdAt: mem.createdAt ?? new Date(0).toISOString(),
   });
