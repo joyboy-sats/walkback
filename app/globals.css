@@ -1,27 +1,141 @@
 @import "tailwindcss";
 
+/*
+ * Walkback design tokens.
+ *
+ * The product is an audit ledger: sources make claims, the system checks them,
+ * and the record has to look like it can be trusted. That argues for paper-like
+ * precision — hairline rules, tabular figures, generous whitespace — rather
+ * than a dashboard of cards with shadows.
+ *
+ * Colour carries exactly one meaning: verdict state. Everything else is ink on
+ * a surface. The accent is reserved for the one action on a page.
+ *
+ * Verdict colours were checked against this surface with the dataviz validator.
+ * Red and green are indistinguishable under deuteranopia (ΔE 4.1), so a verdict
+ * is never colour-alone: each one ships a glyph and a word.
+ */
+
+@theme {
+  --color-surface-0: #08080a;
+  --color-surface-1: #0e0e11;
+  --color-surface-2: #15151a;
+  --color-surface-3: #1c1c22;
+
+  --color-line: #24242c;
+  --color-line-strong: #34343e;
+
+  --color-ink: #f2f2f4;
+  --color-ink-2: #a6a6b2;
+  --color-ink-3: #6b6b78;
+
+  --color-accent: #3987e5;
+  --color-accent-dim: #1f4f8a;
+
+  /* Verdict states. Always paired with a glyph and a word. */
+  --color-true: #0ca30c;
+  --color-false: #d03b3b;
+  --color-void: #6b6b78;
+
+  /* Trust bands, taken from the same accent ramp so a score bar reads as one
+     magnitude scale rather than a traffic light. */
+  --color-band-low: #4a4a56;
+  --color-band-mid: #2f6fb8;
+  --color-band-high: #3987e5;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
 :root {
-  --bg: #0b0b0d;
-  --fg: #e8e8ea;
-  --dim: #8a8a94;
-  --line: #232329;
-  --good: #4ade80;
-  --bad: #f87171;
-  --void: #71717a;
+  color-scheme: dark;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-feature-settings: "tnum";
+  background: var(--color-surface-0);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1, "cv05" 1;
+  line-height: 1.55;
 }
 
-.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+/* Numbers that sit in columns must not shift width between renders. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
 
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1;
+}
+
+/* Small caps label — the workhorse for section headers and metadata keys. */
+.label {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+  font-weight: 500;
+}
+
+/* Hairline rule used to separate ledger rows without drawing boxes. */
+.rule {
+  border-top: 1px solid var(--color-line);
+}
+
+/* ── Trust meter ─────────────────────────────────────────────────────────────
+ * A score is a magnitude against two thresholds, so it is drawn as a track
+ * with the mute and trusted marks always visible. The reader must be able to
+ * see not just "0.48" but how close it is to being muted.
+ */
+.meter {
+  position: relative;
+  height: 6px;
+  background: var(--color-surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.meter > .fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  transition: width 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.meter-track {
+  position: relative;
+}
+
+.meter-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--color-line-strong);
+}
+
+.meter-mark.strong {
+  background: var(--color-ink-3);
+}
+
+/* ── Focus ────────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ── Pending shimmer ──────────────────────────────────────────────────────── */
 .pending-bar {
   height: 2px;
-  background: var(--line);
+  background: var(--color-surface-3);
   overflow: hidden;
 }
 
@@ -29,11 +143,40 @@ body {
   display: block;
   height: 100%;
   width: 35%;
-  background: var(--dim);
+  background: var(--color-accent);
   animation: pending-slide 1.1s ease-in-out infinite;
 }
 
 @keyframes pending-slide {
   0% { transform: translateX(-120%); }
   100% { transform: translateX(320%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter > .fill { transition: none; }
+  .pending-bar > span { animation: none; width: 100%; }
+}
+
+/* ── Entry animation for the feed ─────────────────────────────────────────── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.rise {
+  animation: rise 380ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise { animation: none; }
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 40%, transparent);
+}
+
+/* Scrollbar, dark. */
+* {
+  scrollbar-color: var(--color-line-strong) transparent;
+  scrollbar-width: thin;
 }

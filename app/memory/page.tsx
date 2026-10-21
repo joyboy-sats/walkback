@@ -2,11 +2,11 @@
  * Memory Explorer.
  *
  * The proof-of-work screen for the Walrus Memory prize: every memory ever
- * written, with its blob id, plus a restore button that rebuilds from mainnet.
+ * written, with its blob id. A judge should be able to count them and see that
+ * they exist on mainnet, not just that the app claims to have written them.
  *
- * Deliberately shows `blob_id` next to each row. A judge should be able to
- * count the memories and see that they exist on mainnet, not just that the app
- * claims to have written them.
+ * Design: the blob log is the object. It is rendered as a dense ledger table
+ * with tabular figures so the id column scans as a column, not as noise.
  */
 import { apiGet } from "@/lib/public-api";
 import RebuildButton from "./rebuild-button";
@@ -23,6 +23,8 @@ interface MemoryView {
 }
 
 export const dynamic = "force-dynamic";
+
+const KIND_ORDER = ["source", "claim", "resolution", "score", "digest", "tombstone"];
 
 export default async function MemoryPage() {
   let view: MemoryView | null = null;
@@ -41,79 +43,153 @@ export default async function MemoryPage() {
     return acc;
   }, {});
 
+  const byNamespace = rows.reduce<Record<string, number>>((acc, r) => {
+    acc[r.namespace] = (acc[r.namespace] ?? 0) + 1;
+    return acc;
+  }, {});
+
   return (
     <div>
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Memory</h1>
-        <p className="mt-2 text-sm text-[var(--dim)] max-w-2xl">
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <section className="mb-8">
+        <p className="label mb-2">Walrus Memory · mainnet</p>
+        <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.02em]">
+          The ledger behind the ledger.
+        </h1>
+        <p className="mt-3 max-w-[62ch] text-[14px] leading-relaxed text-ink-2">
           Every claim, verdict and score version is written to Walrus Memory on
           mainnet. Walrus is the system of record; the Postgres tables the rest of
           the app reads are a rebuildable projection of it.
         </p>
-      </div>
-
-      <section className="border border-[var(--line)] rounded-lg p-4">
-        <h2 className="text-sm text-[var(--dim)]">verify against Walrus</h2>
-        <p className="mt-2 text-sm max-w-2xl">
-          The primary action pages the relayer inventory and compares it with
-          Postgres, record by record. The list is metadata, so plaintext is
-          loaded with recall and matched to those blob ids. It reports what
-          matched, what disagreed, and which Postgres rows were not in that
-          inventory, plus the score recomputed from the verdicts. It does not
-          drop tables. Replacing the projection stays unavailable until every
-          live product-namespace memory was read, the rebuild would not shrink
-          sources, claims, resolutions, or score versions, and no seed post is
-          unfinished. It still asks you to confirm. Score versions are recomputed
-          from resolutions, so that namespace is not decrypted. If the list route
-          is missing, the report says it fell back
-          to a recall sample and Replace stays off. The button asks for the
-          admin token once per tab, the same ADMIN_TOKEN the ingest page uses.
-        </p>
-        {loadError ? (
-          <p className="mt-2 text-sm text-[var(--bad)]">{loadError}</p>
-        ) : (
-          <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">{limitation}</p>
-        )}
-        <RebuildButton />
       </section>
 
-      <section className="mt-4 border border-[var(--line)] rounded-lg p-4">
-        <h2 className="text-sm text-[var(--dim)]">on the relayer</h2>
-        <p className="mt-2 text-sm max-w-2xl">
-          Namespace counts live with the delegate key on the worker. This page
-          lists the projection’s memory log, which is rebuilt from those writes.
-        </p>
-      </section>
+      {/* ── KPI ────────────────────────────────────────────────────────── */}
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-line bg-line sm:grid-cols-4">
+        <Kpi label="memories" value={String(rows.length)} />
+        <Kpi label="namespaces" value={String(Object.keys(byNamespace).length)} />
+        <Kpi label="kinds" value={String(Object.keys(byKind).length)} />
+        <Kpi
+          label="score versions"
+          value={String(byKind.score ?? 0)}
+          hint="not decrypted on rebuild"
+        />
+      </dl>
 
-      <section className="mt-4 flex flex-wrap gap-2 text-xs text-[var(--dim)]">
-        {Object.entries(byKind).map(([kind, n]) => (
-          <span key={kind} className="border border-[var(--line)] rounded px-2 py-1">
-            {kind} {n}
-          </span>
-        ))}
-        <span className="ml-auto text-[var(--void)]">
-          {rows.length} row{rows.length === 1 ? "" : "s"} in projection
-        </span>
-      </section>
-
-      <section className="mt-4">
-        <h2 className="text-sm text-[var(--dim)] mb-2">written</h2>
-        <ul className="space-y-1">
-          {rows.map((r) => (
-            <li
-              key={r.id}
-              className="border border-[var(--line)] rounded px-3 py-2 text-xs flex items-baseline gap-3"
-            >
-              <span className="text-[var(--void)] w-20 shrink-0">{r.kind}</span>
-              <span className="text-[var(--dim)] w-44 shrink-0 truncate">{r.namespace}</span>
-              <span className="mono text-[var(--void)] shrink-0">
-                {r.blobId.slice(0, 20)}…
+      {/* ── Kind distribution ──────────────────────────────────────────── */}
+      {rows.length > 0 && (
+        <section className="mt-5">
+          <p className="label mb-2.5">distribution</p>
+          <div className="flex flex-wrap gap-1.5">
+            {KIND_ORDER.filter((k) => byKind[k]).map((k) => (
+              <span
+                key={k}
+                className="inline-flex items-center gap-2 rounded-md border border-line bg-surface-1 px-2.5 py-1.5"
+              >
+                <span className="mono text-[11px] text-ink-2">{k}</span>
+                <span className="tnum text-[12px] font-medium">{byKind[k]}</span>
               </span>
-              <span className="truncate text-[var(--dim)]">{r.textPreview}</span>
-            </li>
-          ))}
-        </ul>
+            ))}
+            {Object.keys(byKind)
+              .filter((k) => !KIND_ORDER.includes(k))
+              .map((k) => (
+                <span
+                  key={k}
+                  className="inline-flex items-center gap-2 rounded-md border border-line bg-surface-1 px-2.5 py-1.5"
+                >
+                  <span className="mono text-[11px] text-ink-3">{k}</span>
+                  <span className="tnum text-[12px] font-medium">{byKind[k]}</span>
+                </span>
+              ))}
+          </div>
+        </section>
+      )}
+
+      {/* ── Verify / rebuild ───────────────────────────────────────────── */}
+      <section className="mt-8 overflow-hidden rounded-lg border border-line">
+        <div className="border-b border-line bg-surface-1 px-4 py-3">
+          <h2 className="text-[14px] font-medium">Verify against Walrus</h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
+            Pages the relayer inventory and compares it with Postgres, record by
+            record. Replacing the projection stays unavailable until every live
+            product-namespace memory was read, the rebuild would not shrink any
+            table, and no seed post is unfinished.
+          </p>
+        </div>
+        <div className="bg-surface-0 px-4 py-4">
+          {loadError ? (
+            <p className="text-[13px] text-false">{loadError}</p>
+          ) : (
+            <p className="mb-4 text-[11px] leading-relaxed text-ink-3">{limitation}</p>
+          )}
+          <RebuildButton />
+        </div>
       </section>
+
+      {/* ── Blob log ───────────────────────────────────────────────────── */}
+      <section className="mt-10">
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="label">written</h2>
+          <span className="text-[11px] text-ink-3">
+            newest first · {rows.length} row{rows.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="text-[13px] text-ink-3">
+            No memories in the projection yet. Ingest a post to write the first one.
+          </p>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-line">
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-line bg-surface-1">
+                  <th className="label px-3 py-2 font-medium">kind</th>
+                  <th className="label hidden px-3 py-2 font-medium sm:table-cell">namespace</th>
+                  <th className="label px-3 py-2 font-medium">blob</th>
+                  <th className="label hidden px-3 py-2 font-medium md:table-cell">preview</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr
+                    key={r.id}
+                    className="border-b border-line last:border-0 transition-colors hover:bg-surface-1"
+                  >
+                    <td className="px-3 py-2 align-middle">
+                      <span className="mono text-[11px] text-ink-2">{r.kind}</span>
+                    </td>
+                    <td className="hidden px-3 py-2 align-middle sm:table-cell">
+                      <span className="mono text-[11px] text-ink-3">{r.namespace}</span>
+                    </td>
+                    <td className="px-3 py-2 align-middle">
+                      <span className="mono text-[11px] text-ink-2" title={r.blobId}>
+                        {r.blobId.length > 22 ? `${r.blobId.slice(0, 22)}…` : r.blobId}
+                      </span>
+                    </td>
+                    <td className="hidden px-3 py-2 align-middle md:table-cell">
+                      <span className="block max-w-[46ch] truncate text-[12px] text-ink-3">
+                        {r.textPreview}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Kpi({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="bg-surface-1 px-4 py-3">
+      <dt className="label">{label}</dt>
+      <dd className="mt-1.5 flex items-baseline gap-2">
+        <span className="tnum text-[19px] font-medium tracking-[-0.01em]">{value}</span>
+        {hint && <span className="text-[11px] text-ink-3">{hint}</span>}
+      </dd>
     </div>
   );
 }

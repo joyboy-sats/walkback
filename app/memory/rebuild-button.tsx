@@ -118,12 +118,12 @@ export default function RebuildButton() {
 
   return (
     <div className="mt-4">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => run("verify")}
           disabled={phase === "working"}
-          className="border border-[var(--line)] rounded px-4 py-2 text-sm hover:border-[var(--dim)] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-50"
         >
           {phase === "working" && action === "verify" ? "Verifying…" : "Verify against Walrus"}
         </button>
@@ -131,15 +131,18 @@ export default function RebuildButton() {
           type="button"
           onClick={() => run("rebuild")}
           disabled={phase === "working" || !canReplace}
-          className="border border-[var(--line)] rounded px-4 py-2 text-sm text-[var(--dim)] hover:border-[var(--dim)] disabled:opacity-40"
+          className="inline-flex items-center gap-2 rounded-md border border-line-strong px-4 py-2 text-[13px] text-ink-2 transition-colors hover:border-ink-3 hover:text-ink disabled:opacity-40"
         >
           {phase === "working" && action === "rebuild" ? "Replacing…" : "Replace projection"}
         </button>
+        {!canReplace && phase === "done" && (
+          <span className="text-[11px] text-ink-3">replace locked</span>
+        )}
       </div>
-      <p className="mt-2 text-xs text-[var(--void)] max-w-2xl">
-        Verify is the demo. It does not drop tables. Replace stays off until coverage is
-        complete and the rebuild would not drop Postgres rows, leave an orphan, or skip an
-        unfinished seed post. A recall fallback cannot turn it on.
+      <p className="mt-2.5 max-w-2xl text-[11px] leading-relaxed text-ink-3">
+        Verify is the demo: it reads Walrus and compares without dropping tables.
+        Replace stays off until coverage is complete and the rebuild would not drop
+        Postgres rows, leave an orphan, or skip an unfinished seed post.
       </p>
 
       {phase === "working" && (
@@ -147,7 +150,7 @@ export default function RebuildButton() {
           <div className="pending-bar">
             <span />
           </div>
-          <p className="mt-3 text-sm text-[var(--dim)]">
+          <p className="mt-3 text-[12px] text-ink-2">
             {jobStatus === "pending" ? "Queued for the worker." : "Reading Walrus and comparing it with Postgres."}{" "}
             Elapsed {elapsed}s.
           </p>
@@ -155,7 +158,9 @@ export default function RebuildButton() {
       )}
 
       {phase === "error" && result?.detail && (
-        <p className="mt-4 text-sm text-[var(--bad)]">{result.detail}</p>
+        <div className="mt-4 rounded-lg border border-false/30 bg-false/5 p-3">
+        <p className="text-[13px] text-ink-2">{result.detail}</p>
+      </div>
       )}
 
       {phase === "done" && result && <Report result={result} />}
@@ -173,15 +178,15 @@ function Report({ result }: { result: VerifyResponse }) {
 
   return (
     <div className="mt-4 text-sm">
-      <p className={result.truncated ? "text-[var(--good)]" : "text-[var(--fg)]"}>{headline}</p>
-      {result.warning && <p className="mt-2 text-[var(--dim)]">{result.warning}</p>}
+      <p className={result.truncated ? "text-[var(--color-true)]" : "text-[var(--color-ink)]"}>{headline}</p>
+      {result.warning && <p className="mt-2 text-[var(--color-ink-2)]">{result.warning}</p>}
       <dl className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Count label="matched" value={result.matched ?? 0} />
         <Count label="mismatched" value={result.mismatched ?? 0} />
         <Count label="missing from recall" value={result.missingFromRecall ?? 0} />
         <Count label="only in recall" value={result.recalledNotInPostgres ?? 0} />
       </dl>
-      <p className="mt-3 text-xs text-[var(--void)] max-w-2xl">
+      <p className="mt-3 text-xs text-[var(--color-ink-3)] max-w-2xl">
         {result.enumeration === "recall-fallback"
           ? "Listing was unavailable. This is a recall sample, so a missing row can still be on Walrus. Replace stays off."
           : result.coverageComplete
@@ -195,7 +200,7 @@ function Report({ result }: { result: VerifyResponse }) {
       </p>
       {result.tables && result.tables.length > 0 && (
         <table className="mt-4 w-full text-xs">
-          <thead className="text-[var(--void)]">
+          <thead className="text-[var(--color-ink-3)]">
             <tr>
               <th className="text-left font-normal py-1">table</th>
               <th className="text-right font-normal">postgres</th>
@@ -204,17 +209,17 @@ function Report({ result }: { result: VerifyResponse }) {
           </thead>
           <tbody>
             {result.tables.map((row) => (
-              <tr key={row.table} className="border-t border-[var(--line)]">
+              <tr key={row.table} className="border-t border-[var(--color-line)]">
                 <td className="py-1">{row.table}</td>
                 <td className="text-right mono">{row.before}</td>
-                <td className={`text-right mono ${row.after < row.before ? "text-[var(--bad)]" : ""}`}>{row.after}</td>
+                <td className={`text-right mono ${row.after < row.before ? "text-[var(--color-false)]" : ""}`}>{row.after}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
       {result.orphans && result.orphans.length > 0 && (
-        <ul className="mt-2 text-xs text-[var(--bad)] space-y-1">
+        <ul className="mt-2 text-xs text-[var(--color-false)] space-y-1">
           {result.orphans.map((orphan) => (
             <li key={`${orphan.kind}:${orphan.id}`}>
               orphan {orphan.kind} {orphan.id}: {orphan.detail}
@@ -223,12 +228,12 @@ function Report({ result }: { result: VerifyResponse }) {
         </ul>
       )}
       {result.unappliedSeedPosts && result.unappliedSeedPosts.length > 0 && (
-        <p className="mt-2 text-xs text-[var(--bad)]">
+        <p className="mt-2 text-xs text-[var(--color-false)]">
           {result.unappliedSeedPosts.length} seed post{result.unappliedSeedPosts.length === 1 ? "" : "s"} with no applied_at.
         </p>
       )}
       {result.coverage?.gaps && result.coverage.gaps.length > 0 && (
-        <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
+        <ul className="mt-2 text-xs text-[var(--color-ink-2)] space-y-1">
           {result.coverage.gaps.map((g) => (
             <li key={g.namespace}>
               {g.namespace}: plaintext for {g.recalled} of {g.reported} listed
@@ -238,7 +243,7 @@ function Report({ result }: { result: VerifyResponse }) {
       )}
       {result.scores && result.scores.length > 0 && (
         <table className="mt-4 w-full text-xs">
-          <thead className="text-[var(--void)]">
+          <thead className="text-[var(--color-ink-3)]">
             <tr>
               <th className="text-left font-normal py-1">source</th>
               <th className="text-right font-normal">stored</th>
@@ -247,10 +252,10 @@ function Report({ result }: { result: VerifyResponse }) {
           </thead>
           <tbody>
             {result.scores.map((s) => (
-              <tr key={s.sourceId} className="border-t border-[var(--line)]">
+              <tr key={s.sourceId} className="border-t border-[var(--color-line)]">
                 <td className="py-1">{s.handle}</td>
                 <td className="text-right mono">{s.storedScore.toFixed(2)}</td>
-                <td className={`text-right mono ${s.agree ? "" : "text-[var(--bad)]"}`}>
+                <td className={`text-right mono ${s.agree ? "" : "text-[var(--color-false)]"}`}>
                   {s.recomputedScore === null ? "not in recall" : s.recomputedScore.toFixed(2)}
                 </td>
               </tr>
@@ -259,7 +264,7 @@ function Report({ result }: { result: VerifyResponse }) {
         </table>
       )}
       {result.notes && result.notes.length > 0 && (
-        <ul className="mt-2 text-xs text-[var(--dim)] space-y-1">
+        <ul className="mt-2 text-xs text-[var(--color-ink-2)] space-y-1">
           {result.notes.map((n) => (
             <li key={n}>{n}</li>
           ))}
@@ -272,7 +277,7 @@ function Report({ result }: { result: VerifyResponse }) {
 function Count({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <dt className="text-xs text-[var(--void)]">{label}</dt>
+      <dt className="text-xs text-[var(--color-ink-3)]">{label}</dt>
       <dd className="mt-1 mono text-lg">{value}</dd>
     </div>
   );
