@@ -12,6 +12,7 @@
  */
 import { notFound } from "next/navigation";
 import { ApiError, apiGet } from "@/lib/public-api";
+import { explainVoidReason } from "@/lib/verdict-reason";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
 import VerdictBadge from "@/components/verdict-badge";
 import { TrustMeter, TrustReadout } from "@/components/trust-meter";
@@ -232,7 +233,7 @@ export default async function SourcePage({
 
                 {resolution && (
                   <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
-                    {resolution.reason}
+                    {explainVoidReason(resolution.reason)}
                   </p>
                 )}
 

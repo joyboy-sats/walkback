@@ -165,6 +165,33 @@ blob id, and the score of each source. `list:memories` prints the whole
 delegate account, not only this run. The worker image includes `scripts/`,
 `data/claims.json`, and `tsx`, which those two commands need.
 
+### Re-resolve a void
+
+A void is sticky: the first resolution is kept, and a later pass does not
+check the claim again. When a void was a failed check rather than an honest
+"could not tell", append a new resolution from the worker container. The
+previous memory stays. The new one uses `resolution:{claimId}:r2` (then
+`r3`, …). A void that becomes true or false writes the next score version.
+The Wilson replay keeps the latest outcome per claim, so the new hit is
+counted once. A claim that is already true or false is skipped unless you
+pass `--force`.
+
+```bash
+npm run reresolve -- \
+  --source-url https://x.com/_OnChainWatch/status/2112452984638444019 \
+  --source-url https://x.com/_OnChainWatch/status/2112436525434622020
+```
+
+The same body works over the API, which checks `x-admin-token` and enqueues
+the job for the worker:
+
+```bash
+curl -s -X POST "$API/resolve" \
+  -H "content-type: application/json" \
+  -H "x-admin-token: $ADMIN_TOKEN" \
+  -d '{"supersede":true,"sourceUrls":["https://x.com/_OnChainWatch/status/2112452984638444019","https://x.com/_OnChainWatch/status/2112436525434622020"]}'
+```
+
 ## Deployment
 
 Postgres runs on the Coolify internal network. Vercel cannot open it, so the

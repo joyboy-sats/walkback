@@ -118,10 +118,23 @@ describe("periodic resolve decision", () => {
 
 describe("resolve job payload", () => {
   it("keeps a manual claim id, a filtered id list, and a due pass distinct", () => {
-    expect(planResolveJob({ claimId: "one", claimIds: ["ignored"] })).toEqual({ type: "one", claimId: "one" });
+    expect(planResolveJob({ claimId: "one", claimIds: ["ignored"] })).toEqual({
+      type: "one",
+      claimId: "one",
+      supersede: false,
+      force: false,
+    });
     expect(planResolveJob({ due: true, limit: 2, claimIds: ["a", "", "b", "c"] })).toEqual({
       type: "ids",
       claimIds: ["a", "b"],
+      supersede: false,
+      force: false,
+    });
+    expect(planResolveJob({ claimIds: ["a"], supersede: true, force: true, limit: 5 })).toEqual({
+      type: "ids",
+      claimIds: ["a"],
+      supersede: true,
+      force: true,
     });
     expect(planResolveJob({ due: true, limit: 4 })).toEqual({ type: "due", limit: 4 });
     expect(planResolveJob({})).toEqual({ type: "due", limit: PERIODIC_RESOLVE_LIMIT });

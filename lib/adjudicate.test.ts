@@ -128,6 +128,9 @@ describe("adjudicate voids", () => {
       net: "100",
       sampledBlocks: 50,
       truncated: true,
+      unreadableDigests: [],
+      droppedPhantoms: 0,
+      digests: [],
     });
 
     const verdict = await adjudicate(
@@ -149,6 +152,36 @@ describe("adjudicate voids", () => {
 
     expectVoidLeavesScore(verdict);
     expect(verdict.reason.toLowerCase()).toMatch(/unknown|no verdict/);
+  });
+
+  it("voids an empty-effect RPC error in plain language, and does not call it a lie", async () => {
+    vi.mocked(netChangeInWindow).mockRejectedValue(
+      new TatumError(
+        'ErrorObject { code: InvalidParams, message: "unable to derive balance/object changes because effect is empty", data: None }',
+      ),
+    );
+
+    const verdict = await adjudicate(
+      input({
+        claimType: "tx_replay",
+        params: {
+          address: ADDRESS,
+          asset: ASSET,
+          since: "2026-10-20T07:43:00.000Z",
+          until: "2026-10-20T07:58:00.000Z",
+          direction: "gte",
+          amount: "5350853000000000",
+        },
+        snapshot: null,
+        deadline: PAST,
+      }),
+      NOW,
+    );
+
+    expectVoidLeavesScore(verdict);
+    expect(verdict.reason.toLowerCase()).toContain("no effects");
+    expect(verdict.reason.toLowerCase()).not.toMatch(/lied|false/);
+    expect(verdict.reason).not.toContain("ErrorObject");
   });
 
   it("voids a placeholder address instead of trusting a zero balance", async () => {

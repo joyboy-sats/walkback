@@ -21,14 +21,23 @@ import { boot } from "../backend/boot";
 import { ingestBody } from "../lib/ingest-body";
 import { enqueueJob, readJob } from "../lib/job-queue";
 import { corsHeaders, preflightStatus, tokenMatches } from "../lib/http-guard";
-import { readFeed, readMemory, readSource } from "../lib/reads";
+import { claimsForSourceUrls, readFeed, readMemory, readSource } from "../lib/reads";
 import { NS } from "../lib/types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const resolveBody = z.union([
-  z.object({ claimId: z.string().uuid() }),
+  z.object({
+    claimId: z.string().uuid(),
+    supersede: z.boolean().optional(),
+    force: z.boolean().optional(),
+  }),
   z.object({ due: z.literal(true), limit: z.number().int().min(1).max(25).optional() }),
+  z.object({
+    supersede: z.literal(true),
+    force: z.boolean().optional(),
+    sourceUrls: z.array(z.string().url()).min(1).max(20),
+  }),
 ]);
 
 const rebuildBody = z.object({
@@ -189,6 +198,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
       }
       if (path === "/resolve") {
         const parsed = resolveBody.parse(raw);
+        if ("sourceUrls" in parsed) {
+          const rows = await claimsForSourceUrls(parsed.sourceUrls);
+          const found = new Set(rows.map((row) => row.sourceUrl));
+          const missing = parsed.sourceUrls.filter((url) => !found.has(url));
+          if (missing.length > 0 || rows.length === 0) {
+            send(res, 400, { error: "unknown source url", missing }, cors);
+            return;
+          }
+          const id = await enqueueJob("resolve", {
+            claimIds: rows.map((row) => row.id),
+            supersede: true,
+            force: parsed.force === true,
+            limit: rows.length,
+          });
+          send(res, 202, { jobId: id, claimIds: rows.map((row) => row.id) }, cors);
+          return;
+        }
         const id = await enqueueJob("resolve", parsed);
         send(res, 202, { jobId: id }, cors);
         return;

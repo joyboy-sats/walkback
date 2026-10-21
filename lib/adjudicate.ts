@@ -21,6 +21,7 @@ import {
   TatumError,
 } from "./tatum";
 import { isPlaceholderAddress } from "./scoring-exclusion";
+import { explainVoidReason } from "./verdict-reason";
 import type {
   BalanceChangeParams,
   BalanceSnapshot,
@@ -124,7 +125,7 @@ export async function adjudicate(
   } catch (err) {
     // Rule 4: a dead provider is a void, not a lie.
     const message = err instanceof TatumError ? err.message : String(err);
-    return voidVerdict(`Check failed: ${message}`, {
+    return voidVerdict(explainVoidReason(`Check failed: ${message}`), {
       error: message,
       claimType: input.claimType,
     });
@@ -187,12 +188,19 @@ async function resolveBalanceChange(
 
 async function resolveTxReplay(p: TxReplayParams): Promise<Verdict> {
   const asset = p.asset || SUI_COIN_TYPE;
-  const { net, sampledBlocks, truncated } = await netChangeInWindow(
-    p.address,
-    asset,
-    p.since,
-    p.until,
-  );
+  const replay = await netChangeInWindow(p.address, asset, p.since, p.until);
+  const { net, sampledBlocks, truncated } = replay;
+  const unreadableDigests = replay.unreadableDigests ?? [];
+  const evidence = {
+    net,
+    sampledBlocks,
+    truncated,
+    since: p.since,
+    until: p.until,
+    droppedPhantoms: replay.droppedPhantoms ?? 0,
+    unreadableDigests,
+    digests: replay.digests ?? [],
+  };
 
   // A truncated replay gives a floor, not a total. Reporting a verdict from it
   // would be manufacturing evidence.
@@ -200,7 +208,15 @@ async function resolveTxReplay(p: TxReplayParams): Promise<Verdict> {
     return voidVerdict(
       `Transaction history for ${short(p.address)} exceeded the replay window ` +
         `(${sampledBlocks} blocks read); the total is unknown, so no verdict.`,
-      { net, sampledBlocks, truncated, since: p.since, until: p.until },
+      evidence,
+    );
+  }
+
+  if (unreadableDigests.length > 0) {
+    const shown = unreadableDigests.slice(0, 3).join(", ");
+    return voidVerdict(
+      `Could not read balance changes for ${shown} inside the window, so the total is unknown.`,
+      evidence,
     );
   }
 
@@ -215,7 +231,7 @@ async function resolveTxReplay(p: TxReplayParams): Promise<Verdict> {
       `${p.until.slice(0, 10)}, ${short(p.address)} netted ` +
       `${netBig >= 0n ? "+" : "-"}${fmt(magnitude.toString())} ${ticker(asset)}; ` +
       `${ok ? "" : "not "}${OP[p.direction]} the ${fmt(p.amount)} claimed.`,
-    evidence: { net, sampledBlocks, truncated, since: p.since, until: p.until },
+    evidence,
   };
 }
 

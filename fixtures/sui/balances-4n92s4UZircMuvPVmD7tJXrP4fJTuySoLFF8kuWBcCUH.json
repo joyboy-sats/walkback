@@ -1,0 +1,25 @@
+{
+  "digest": "4n92s4UZircMuvPVmD7tJXrP4fJTuySoLFF8kuWBcCUH",
+  "timestampMs": "1791877845432",
+  "checkpoint": "333477446",
+  "balanceChanges": [
+    {
+      "owner": {
+        "AddressOwner": "0x376afef39c3016ed9459e149f3cda2dcb5d9a0d4ef189d84b9b70060c30471da"
+      },
+      "coinType": "0x2::sui::SUI",
+      "amount": "2344991222286060"
+    },
+    {
+      "owner": {
+        "AddressOwner": "0x60dd01bc037e2c1ea2aaf02187701f9f4453ba323338d2f2f521957065b0984d"
+      },
+      "coinType": "0x2::sui::SUI",
+      "amount": "-2344991180706506"
+    }
+  ],
+  "_source": {
+    "method": "sui_multiGetTransactionBlocks",
+    "node": "https://sui.api.onfinality.io/public"
+  }
+}
