@@ -12,6 +12,7 @@ import {
 
 const documented = JSON.parse(readFileSync("fixtures/tatum/ohlcv-btc-documented.json", "utf8"));
 const documentedBatch = JSON.parse(readFileSync("fixtures/tatum/ohlcv-batch-btc-documented.json", "utf8"));
+const suiHour = JSON.parse(readFileSync("fixtures/tatum/ohlcv-sui-1h-2025-10-09T08.json", "utf8"));
 
 describe("Tatum OHLCV fixture", () => {
   it("parses the published HistoricalPrice body", () => {
@@ -31,6 +32,31 @@ describe("Tatum OHLCV fixture", () => {
     const candles = parseTatumCandles(documentedBatch);
     expect(candles).toHaveLength(1);
     expect(candles![0]!.close).toBe(69830.68);
+  });
+
+  it("parses the live SUI hour: string prices, ms bounds, candle contains 08:00Z", () => {
+    const candle = parseTatumCandle(suiHour);
+    expect(candle).not.toBeNull();
+    expect(suiHour.open).toBe("3.44100000");
+    expect(candle!.open).toBe(3.441);
+    expect(candle!.high).toBe(3.446);
+    expect(candle!.low).toBe(3.3747);
+    expect(candle!.close).toBe(3.3813);
+    expect(candle!.openTimeMs).toBe(1759996800000);
+    expect(candle!.closeTimeMs).toBe(1760000399999);
+    expect(candle!.closeTimeMs - candle!.openTimeMs).toBe(3_599_999);
+    expect(candle!.openTime).toBe("2025-10-09T08:00:00.000Z");
+    expect(spanMatchesInterval(candle!, "1h")).toBe(true);
+    expect(candleEndExclusiveMs(candle!, "1h")).toBe(1759996800000 + 3_600_000);
+    const open = Date.parse("2025-10-09T08:00:00Z");
+    const inside = Date.parse("2025-10-09T08:53:20.000Z");
+    const next = Date.parse("2025-10-09T09:00:00Z");
+    expect(open).toBe(candle!.openTimeMs);
+    expect(inside).toBe(1760000000000);
+    expect(candleCoversInstant(candle!, open, "1h")).toBe(true);
+    expect(candleCoversInstant(candle!, inside, "1h")).toBe(true);
+    expect(candleCoversInstant(candle!, candle!.closeTimeMs, "1h")).toBe(true);
+    expect(candleCoversInstant(candle!, next, "1h")).toBe(false);
   });
 
   it("treats the published closeTime as the last millisecond inside a 1m bucket", () => {

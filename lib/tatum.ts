@@ -606,12 +606,32 @@ async function requestRate(
 }
 
 /**
+ * Query value for `time` and `timeFrom`.
+ *
+ * Tatum rejects epoch milliseconds. A live call with
+ * `time=1760000000000` returned HTTP 400
+ * `time must be a Date instance`. The same route with
+ * `time=2025-10-09T08:00:00Z` returned the SUI candle. `timeFrom` on the
+ * batch route is sent the same way. Whole seconds drop the `.000` so the
+ * wire value matches that call.
+ */
+export function ohlcvQueryTime(ms: number): string {
+  if (!Number.isFinite(ms)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  const iso = new Date(ms).toISOString().replace(/\.000Z$/, "Z");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(iso)) {
+    throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
+  }
+  return iso;
+}
+
+/**
  * One historical USD candle from GET /v4/data/rate/symbol/OHLCV.
  *
  * The endpoint returns the nearest candle when the requested time is outside
  * its history. A candle that does not contain `atIso` is `null`, not a price.
  * `undefined` is an unsupported symbol (HTTP 404). Quote is USD; there is no
- * basePair on this route. 50 credits per call.
+ * basePair on this route. 50 credits per call. `time` is an ISO-8601 UTC
+ * string from `ohlcvQueryTime`.
  */
 export async function getOhlcvAt(
   symbol: string,
@@ -621,10 +641,11 @@ export async function getOhlcvAt(
   const atMs = Date.parse(atIso);
   if (Number.isNaN(atMs)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
   const key = `ohlcv-${symbol.toUpperCase()}-${interval}-${atMs}`;
+  const time = ohlcvQueryTime(atMs);
   const raw = await ohlcvRequest(key, (url) => {
     const endpoint = new URL(url);
     endpoint.searchParams.set("symbol", symbol);
-    endpoint.searchParams.set("time", new Date(atMs).toISOString());
+    endpoint.searchParams.set("time", time);
     endpoint.searchParams.set("interval", interval);
     return endpoint.toString();
   }, "at");
@@ -653,10 +674,11 @@ export async function getOhlcvPage(
   if (Number.isNaN(fromMs)) throw new TatumError("ohlcv time is not a timestamp", undefined, "ohlcv");
   const size = Math.min(50, Math.max(1, Math.floor(limit)));
   const key = `ohlcv-batch-${symbol.toUpperCase()}-${interval}-${fromMs}-${size}`;
+  const timeFrom = ohlcvQueryTime(fromMs);
   const raw = await ohlcvRequest(key, (url) => {
     const endpoint = new URL(url);
     endpoint.searchParams.set("symbol", symbol);
-    endpoint.searchParams.set("timeFrom", new Date(fromMs).toISOString());
+    endpoint.searchParams.set("timeFrom", timeFrom);
     endpoint.searchParams.set("numberOfCandles", String(size));
     endpoint.searchParams.set("interval", interval);
     return endpoint.toString();
