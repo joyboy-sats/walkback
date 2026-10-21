@@ -59,6 +59,11 @@ describe("data/claims.json", () => {
       if (claim.claim_type === "price_threshold") {
         expect(String(claim.params.symbol).toUpperCase()).toBe("SUI");
         expect(String(claim.params.quote ?? "USD").toUpperCase()).toBe("USD");
+        expect(claim.params.evaluation).toBe("touch");
+        expect(claim.params.since).toBe(post.published_at);
+        expect(stored.params).toMatchObject({ evaluation: "touch", since: post.published_at });
+        expect(claim.deadline_basis?.length).toBeGreaterThan(0);
+        expect(stored.deadlineBasis).toBe(claim.deadline_basis);
         expect(claim.deadline > AS_OF).toBe(true);
         expect(post.sui_address).toBeUndefined();
         pendingPrice.push(post.id);

@@ -69,7 +69,7 @@ types:
 | `balance_threshold` | `suix_getBalance` |
 | `balance_change_since_ingest` | snapshot vs. `suix_getBalance` at deadline |
 | `tx_replay` | `suix_queryTransactionBlocks` + `showBalanceChanges` |
-| `price_threshold` | Tatum rate API *(unverified for SUI — see note)* |
+| `price_threshold` | Tatum historical USD candles (`/v4/data/rate/symbol/OHLCV`) |
 | `manual` | human verdict, demo fallback |
 
 Trust is a **Wilson lower bound** over hits and misses, not a raw ratio and not
@@ -277,7 +277,9 @@ The API does not need the Walrus or Tatum keys.
 | `MEMWAL_SERVER_URL` | `https://relayer.memory.walrus.xyz` |
 | `TATUM_API_KEY` | From the Tatum dashboard |
 | `TATUM_SUI_RPC_URL` | `https://sui-mainnet.gateway.tatum.io` |
-| `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` |
+| `TATUM_RATE_URL` | `https://api.tatum.io/v4/data/rate/symbol` (spot; not used for verdicts) |
+| `TATUM_OHLCV_URL` | `https://api.tatum.io/v4/data/rate/symbol/OHLCV` |
+| `TATUM_OHLCV_BATCH_URL` | `https://api.tatum.io/v4/data/rate/symbol/OHLCV/batch` |
 | `AI_GATEWAY_API_KEY` | Claim extraction |
 | `EXTRACT_MODEL` | Optional. Gateway model id, not a secret. Default `deepseek/deepseek-v4.1-flash` (DeepSeek V4.1 Flash). The API and Vercel do not read it. |
 | `DEMO_MODE` | `live` |
@@ -288,15 +290,15 @@ Seed is a one-off in the worker container's terminal, after the image is deploye
 
 ## Known open questions
 
-- `price_threshold` is priced by `getRate` in `lib/tatum.ts`, which calls the
-  Tatum rate endpoint (`TATUM_RATE_URL`, default
-  `https://api.tatum.io/v4/data/rate/symbol`) with `symbol` and `basePair`.
-  There is no CoinGecko client. The six seeded price claims are all `SUI` /
-  `USD`, so resolution asks for exactly that pair. Support for `symbol=SUI`
-  is unverified: the endpoint needs `TATUM_API_KEY`, and a 404 or a null
-  `value` becomes `void` ("the rate feed does not cover SUI/USD"). A void does
-  not move the score. Those six deadlines are 2026-10-30 and 2026-11-08, so
-  the seed does not call the rate endpoint.
+- `price_threshold` is judged from Tatum historical USD candles
+  (`/v4/data/rate/symbol/OHLCV`), not from the spot rate at the moment the
+  worker runs. A touch uses the hourly high or low over `[published_at, deadline]`
+  (daily candles only when hourly cannot be requested). A deadline claim uses
+  the hourly candle that contains the deadline. A missing symbol, a non-USD
+  quote, or a gap in the series is `void` and does not move the score. The
+  six seeded price claims are all touches, still pending until 2026-10-30 and
+  2026-11-08. `deadline_basis` records why that deadline was chosen; the
+  resolver does not invent one.
 - `restore()` has no pagination cursor and costs seconds per blob; large
   namespaces may not fully restore in one call.
 

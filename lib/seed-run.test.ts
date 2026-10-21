@@ -52,8 +52,9 @@ function post(id: string, handle: string) {
       {
         quote: "SUI will trade above 2 USD.",
         claim_type: "price_threshold" as const,
-        params: { symbol: "SUI", quote: "USD", direction: "gte" as const, amount: "2" },
+        params: { symbol: "SUI", quote: "USD", direction: "gte" as const, amount: "2", evaluation: "touch" },
         deadline: "2026-10-30T00:00:00.000Z",
+        deadline_basis: "stated in post",
         confidence: 0.8,
       },
     ],
