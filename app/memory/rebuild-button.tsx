@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
+import { formatCount, formatFixed } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
 import { apiPost, pollJob } from "@/lib/public-api";
 
 /**
@@ -47,7 +50,14 @@ interface VerifyResponse {
   detail?: string;
 }
 
+function useUiLocale(): Locale {
+  const value = useLocale();
+  return isLocale(value) ? value : "en";
+}
+
 export default function RebuildButton() {
+  const t = useTranslations("rebuild");
+  const tokenCopy = useTranslations("ingest");
   const [phase, setPhase] = useState<"idle" | "working" | "done" | "error">("idle");
   const [action, setAction] = useState<"verify" | "rebuild">("verify");
   const [elapsed, setElapsed] = useState(0);
@@ -73,9 +83,7 @@ export default function RebuildButton() {
 
   async function run(mode: "verify" | "rebuild") {
     if (mode === "rebuild") {
-      const ok = window.confirm(
-        "Replace the Postgres projection with the listed memories? This drops the current tables. Do it only after the coverage report is complete.",
-      );
+      const ok = window.confirm(t("confirm"));
       if (!ok) return;
     }
     setAction(mode);
@@ -84,7 +92,10 @@ export default function RebuildButton() {
     setJobStatus(null);
     setResult(null);
     try {
-      const token = askAdminToken();
+      const token = askAdminToken({
+        prompt: tokenCopy("tokenPrompt"),
+        required: tokenCopy("tokenRequired"),
+      });
       const res = await apiPost("/rebuild", mode === "rebuild" ? { mode: "rebuild", confirm: true } : { mode: "verify" }, token);
       if (res.status === 401) clearAdminToken();
       if (res.status === 401 || res.status >= 400 || !res.body?.jobId) {
@@ -93,8 +104,8 @@ export default function RebuildButton() {
           error: "request failed",
           detail:
             res.status === 401
-              ? "Admin token was rejected. Click again and enter the Coolify ADMIN_TOKEN."
-              : res.body?.detail || res.body?.error || `request failed (${res.status})`,
+              ? t("tokenRejected")
+              : res.body?.detail || res.body?.error || t("requestFailed", { status: res.status }),
         });
         return;
       }
@@ -102,7 +113,7 @@ export default function RebuildButton() {
       if (cancel.current) return;
       if (job.status === "failed") {
         setPhase("error");
-        setResult({ error: "request failed", detail: job.error || "the worker failed" });
+        setResult({ error: "request failed", detail: job.error || t("workerFailed") });
         return;
       }
       setResult(job.result as VerifyResponse);
@@ -125,7 +136,7 @@ export default function RebuildButton() {
           disabled={phase === "working"}
           className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-50"
         >
-          {phase === "working" && action === "verify" ? "Verifying…" : "Verify against Walrus"}
+          {phase === "working" && action === "verify" ? t("verifying") : t("verify")}
         </button>
         <button
           type="button"
@@ -133,17 +144,13 @@ export default function RebuildButton() {
           disabled={phase === "working" || !canReplace}
           className="inline-flex items-center gap-2 rounded-md border border-line-strong px-4 py-2 text-[13px] text-ink-2 transition-colors hover:border-ink-3 hover:text-ink disabled:opacity-40"
         >
-          {phase === "working" && action === "rebuild" ? "Replacing…" : "Replace projection"}
+          {phase === "working" && action === "rebuild" ? t("replacing") : t("replace")}
         </button>
         {!canReplace && phase === "done" && (
-          <span className="text-[11px] text-ink-3">replace locked</span>
+          <span className="text-[11px] text-ink-3">{t("locked")}</span>
         )}
       </div>
-      <p className="mt-2.5 max-w-2xl text-[11px] leading-relaxed text-ink-3">
-        Verify is the demo: it reads Walrus and compares without dropping tables.
-        Replace stays off until coverage is complete and the rebuild would not drop
-        Postgres rows, leave an orphan, or skip an unfinished seed post.
-      </p>
+      <p className="mt-2.5 max-w-2xl text-[11px] leading-relaxed text-ink-3">{t("help")}</p>
 
       {phase === "working" && (
         <div className="mt-4" aria-busy="true">
@@ -151,8 +158,7 @@ export default function RebuildButton() {
             <span />
           </div>
           <p className="mt-3 text-[12px] text-ink-2">
-            {jobStatus === "pending" ? "Queued for the worker." : "Reading Walrus and comparing it with Postgres."}{" "}
-            Elapsed {elapsed}s.
+            {jobStatus === "pending" ? t("queued") : t("reading")} {t("elapsed", { seconds: elapsed })}
           </p>
         </div>
       )}
@@ -169,50 +175,54 @@ export default function RebuildButton() {
 }
 
 function Report({ result }: { result: VerifyResponse }) {
+  const t = useTranslations("rebuild");
+  const locale = useUiLocale();
   const headline =
     result.mode === "rebuild" && result.truncated
-      ? "Projection replaced from the listed memories."
+      ? t("replaced")
       : result.mode === "rebuild"
-        ? "Projection was not replaced."
-        : "Verification finished. Postgres was not modified.";
+        ? t("notReplaced")
+        : t("verified");
 
   return (
     <div className="mt-4 text-sm">
       <p className={result.truncated ? "text-[var(--color-true)]" : "text-[var(--color-ink)]"}>{headline}</p>
       {result.warning && <p className="mt-2 text-[var(--color-ink-2)]">{result.warning}</p>}
       <dl className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Count label="matched" value={result.matched ?? 0} />
-        <Count label="mismatched" value={result.mismatched ?? 0} />
-        <Count label="missing from recall" value={result.missingFromRecall ?? 0} />
-        <Count label="only in recall" value={result.recalledNotInPostgres ?? 0} />
+        <Count label={t("matched")} value={result.matched ?? 0} locale={locale} />
+        <Count label={t("mismatched")} value={result.mismatched ?? 0} locale={locale} />
+        <Count label={t("missingRecall")} value={result.missingFromRecall ?? 0} locale={locale} />
+        <Count label={t("onlyRecall")} value={result.recalledNotInPostgres ?? 0} locale={locale} />
       </dl>
       <p className="mt-3 text-xs text-[var(--color-ink-3)] max-w-2xl">
         {result.enumeration === "recall-fallback"
-          ? "Listing was unavailable. This is a recall sample, so a missing row can still be on Walrus. Replace stays off."
+          ? t("recallFallback")
           : result.coverageComplete
-            ? "Every listed product memory was read. A missing row is not in that inventory."
-            : "Coverage is incomplete, so a missing row can still be on Walrus."}
-        {result.coverage ? ` ${result.coverage.unique} memories with plaintext from ${result.coverage.rawHits} recall hits.` : ""}
-        {result.coverageComplete ? " Product-namespace coverage is complete." : " Product-namespace coverage is not complete."}
+            ? t("coverageRead")
+            : t("coverageIncomplete")}{" "}
+        {result.coverage
+          ? t("plaintext", { unique: result.coverage.unique, hits: result.coverage.rawHits })
+          : ""}{" "}
+        {result.coverageComplete ? t("nsComplete") : t("nsIncomplete")}
         {result.excludedNamespaces && result.excludedNamespaces.length > 0
-          ? ` Excluded namespaces: ${result.excludedNamespaces.join(", ")}.`
+          ? ` ${t("excluded", { names: result.excludedNamespaces.join(", ") })}`
           : ""}
       </p>
       {result.tables && result.tables.length > 0 && (
         <table className="mt-4 w-full text-xs">
           <thead className="text-[var(--color-ink-3)]">
             <tr>
-              <th className="text-left font-normal py-1">table</th>
-              <th className="text-right font-normal">postgres</th>
-              <th className="text-right font-normal">rebuilt</th>
+              <th className="text-left font-normal py-1">{t("table")}</th>
+              <th className="text-right font-normal">{t("postgres")}</th>
+              <th className="text-right font-normal">{t("rebuilt")}</th>
             </tr>
           </thead>
           <tbody>
             {result.tables.map((row) => (
               <tr key={row.table} className="border-t border-[var(--color-line)]">
                 <td className="py-1">{row.table}</td>
-                <td className="text-right mono">{row.before}</td>
-                <td className={`text-right mono ${row.after < row.before ? "text-[var(--color-false)]" : ""}`}>{row.after}</td>
+                <td className="text-right mono">{formatCount(row.before, locale)}</td>
+                <td className={`text-right mono ${row.after < row.before ? "text-[var(--color-false)]" : ""}`}>{formatCount(row.after, locale)}</td>
               </tr>
             ))}
           </tbody>
@@ -222,21 +232,21 @@ function Report({ result }: { result: VerifyResponse }) {
         <ul className="mt-2 text-xs text-[var(--color-false)] space-y-1">
           {result.orphans.map((orphan) => (
             <li key={`${orphan.kind}:${orphan.id}`}>
-              orphan {orphan.kind} {orphan.id}: {orphan.detail}
+              {t("orphan", { kind: orphan.kind, id: orphan.id, detail: orphan.detail })}
             </li>
           ))}
         </ul>
       )}
       {result.unappliedSeedPosts && result.unappliedSeedPosts.length > 0 && (
         <p className="mt-2 text-xs text-[var(--color-false)]">
-          {result.unappliedSeedPosts.length} seed post{result.unappliedSeedPosts.length === 1 ? "" : "s"} with no applied_at.
+          {t("seedPosts", { count: result.unappliedSeedPosts.length })}
         </p>
       )}
       {result.coverage?.gaps && result.coverage.gaps.length > 0 && (
         <ul className="mt-2 text-xs text-[var(--color-ink-2)] space-y-1">
           {result.coverage.gaps.map((g) => (
             <li key={g.namespace}>
-              {g.namespace}: plaintext for {g.recalled} of {g.reported} listed
+              {t("gap", { namespace: g.namespace, recalled: g.recalled, reported: g.reported })}
             </li>
           ))}
         </ul>
@@ -245,18 +255,18 @@ function Report({ result }: { result: VerifyResponse }) {
         <table className="mt-4 w-full text-xs">
           <thead className="text-[var(--color-ink-3)]">
             <tr>
-              <th className="text-left font-normal py-1">source</th>
-              <th className="text-right font-normal">stored</th>
-              <th className="text-right font-normal">recomputed</th>
+              <th className="text-left font-normal py-1">{t("source")}</th>
+              <th className="text-right font-normal">{t("stored")}</th>
+              <th className="text-right font-normal">{t("recomputed")}</th>
             </tr>
           </thead>
           <tbody>
             {result.scores.map((s) => (
               <tr key={s.sourceId} className="border-t border-[var(--color-line)]">
                 <td className="py-1">{s.handle}</td>
-                <td className="text-right mono">{s.storedScore.toFixed(2)}</td>
+                <td className="text-right mono">{formatFixed(s.storedScore, locale)}</td>
                 <td className={`text-right mono ${s.agree ? "" : "text-[var(--color-false)]"}`}>
-                  {s.recomputedScore === null ? "not in recall" : s.recomputedScore.toFixed(2)}
+                  {s.recomputedScore === null ? t("notInRecall") : formatFixed(s.recomputedScore, locale)}
                 </td>
               </tr>
             ))}
@@ -274,11 +284,11 @@ function Report({ result }: { result: VerifyResponse }) {
   );
 }
 
-function Count({ label, value }: { label: string; value: number }) {
+function Count({ label, value, locale }: { label: string; value: number; locale: Locale }) {
   return (
     <div>
       <dt className="text-xs text-[var(--color-ink-3)]">{label}</dt>
-      <dd className="mt-1 mono text-lg">{value}</dd>
+      <dd className="mt-1 mono text-lg">{formatCount(value, locale)}</dd>
     </div>
   );
 }

@@ -11,11 +11,15 @@
  * deserves an axis.
  */
 import { notFound } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
 import { ApiError, apiGet } from "@/lib/public-api";
+import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, scoreIsShown, trustBand } from "@/lib/score";
+import { formatCount, formatDateOnly, formatFixed, formatPercent } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
+import { matchVoidReason, voidReasonValues } from "@/lib/void-reason";
 import { explainVoidReason } from "@/lib/verdict-reason";
-import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
 import VerdictBadge from "@/components/verdict-badge";
-import { TrustMeter, TrustReadout } from "@/components/trust-meter";
+import { TrustMeter } from "@/components/trust-meter";
 import { InspectIllustration } from "@/components/illustrations";
 import { HaloBadge } from "@/components/ui/halo-badge";
 import { Button } from "@/components/ui/button";
@@ -56,6 +60,11 @@ export default async function SourcePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const t = await getTranslations("source");
+  const bandLabel = await getTranslations("band");
+  const voidCopy = await getTranslations("voidReason");
+  const common = await getTranslations("common");
+  const locale = await uiLocale();
   const { id } = await params;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
     notFound();
@@ -68,7 +77,7 @@ export default async function SourcePage({
     const message = err instanceof Error ? err.message : String(err);
     return (
       <div className="rounded-lg border border-false/30 bg-false/5 p-4">
-        <p className="label mb-1 text-false">Could not load source</p>
+        <p className="label mb-1 text-false">{t("couldNotLoad")}</p>
         <p className="text-[13px] text-ink-2">{message}</p>
       </div>
     );
@@ -77,7 +86,23 @@ export default async function SourcePage({
   const { source, versions, claims } = detail;
   const adjudicated = source.hits + source.misses;
   const band = trustBand(source.score, adjudicated);
+  const rated = scoreIsShown(adjudicated);
   const hitRate = adjudicated === 0 ? null : source.hits / adjudicated;
+  const deadlines = claims
+    .map((row) => row.claim.deadline)
+    .filter((value) => value.length >= 10)
+    .sort();
+  const firstDeadline = deadlines[0];
+  const lastDeadline = deadlines[deadlines.length - 1];
+  const windowLabel =
+    !firstDeadline || !lastDeadline
+      ? common("unavailable")
+      : firstDeadline.slice(0, 10) === lastDeadline.slice(0, 10)
+        ? formatDateOnly(firstDeadline, locale)
+        : t("windowRange", {
+            from: formatDateOnly(firstDeadline, locale),
+            to: formatDateOnly(lastDeadline, locale),
+          });
 
   const counts = claims.reduce(
     (acc, c) => {
@@ -93,7 +118,7 @@ export default async function SourcePage({
       <Button asChild variant="ghost" size="sm" className="-ml-2 h-7 gap-1.5 px-2 text-[12px] text-ink-3">
         <a href="/">
           <ArrowLeft className="h-3.5 w-3.5" />
-          Feed
+          {t("back")}
         </a>
       </Button>
 
@@ -115,9 +140,9 @@ export default async function SourcePage({
             variant={band === "muted" ? "destructive" : band === "trusted" ? "default" : "secondary"}
             tabularNums
           >
-            {band}
+            {bandLabel(band)}
           </HaloBadge>
-          <span className="label">Source · evidence chain</span>
+          <span className="label">{t("kicker")}</span>
         </div>
         <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-4">
           <div className="flex items-end gap-5">
@@ -127,42 +152,52 @@ export default async function SourcePage({
           </div>
           <div className="flex items-end gap-8">
             <div>
-              <p className="label mb-1.5">trust</p>
+              <p className="label mb-1.5">{t("trust")}</p>
               <p className="tnum text-[30px] font-semibold leading-none tracking-[-0.02em]">
-                {source.score.toFixed(2)}
+                {rated ? formatFixed(source.score, locale) : common("unavailable")}
+              </p>
+              {!rated && (
+                <p className="mt-1.5 text-[11px] text-ink-3">
+                  {common("needed", { done: adjudicated, need: MIN_SAMPLE })}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="label mb-1.5">{t("sample")}</p>
+              <p className="text-[13px] leading-relaxed text-ink-2">
+                <span className="tnum">{formatCount(source.hits, locale)}</span> {t("hit")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(source.misses, locale)}</span> {t("miss")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(counts.void, locale)}</span> {t("void")}
+                <span className="text-ink-3"> · </span>
+                <span className="tnum">{formatCount(counts.pending, locale)}</span> {t("pending")}
               </p>
             </div>
             <div>
-              <p className="label mb-1.5">record</p>
-              <p className="tnum text-[16px] leading-none text-ink-2">
-                {source.hits}
-                <span className="text-ink-3"> hit </span>
-                {source.misses}
-                <span className="text-ink-3"> miss</span>
-              </p>
+              <p className="label mb-1.5">{t("window")}</p>
+              <p className="tnum text-[13px] leading-relaxed text-ink-2">{windowLabel}</p>
             </div>
             <div>
-              <p className="label mb-1.5">hit rate</p>
+              <p className="label mb-1.5">{t("hitRate")}</p>
               <p className="tnum text-[16px] leading-none text-ink-2">
-                {hitRate === null ? "—" : `${(hitRate * 100).toFixed(0)}%`}
+                {hitRate === null ? common("unavailable") : formatPercent(hitRate, locale)}
               </p>
             </div>
           </div>
         </div>
 
         <div className="mt-6">
-          <TrustMeter score={source.score} band={band} />
+          <TrustMeter score={source.score} band={band} rated={rated} />
           <div className="mt-2 flex justify-between text-[11px] text-ink-3">
-            <span>mute {TRUST_MUTED.toFixed(2)}</span>
-            <span>trust {TRUST_TRUSTED.toFixed(2)}</span>
+            <span>{t("mute", { value: formatFixed(TRUST_MUTED, locale) })}</span>
+            <span>{t("trustMark", { value: formatFixed(TRUST_TRUSTED, locale) })}</span>
           </div>
         </div>
 
         {adjudicated < MIN_SAMPLE && (
           <p className="mt-4 max-w-[62ch] text-[13px] leading-relaxed text-ink-2">
-            Below the {MIN_SAMPLE}-claim minimum. A perfect record on one or two
-            claims is not evidence yet — that is exactly what the lower bound
-            encodes, and why no band is assigned.
+            {t("belowMin", { count: MIN_SAMPLE })}
           </p>
         )}
         </div>
@@ -174,34 +209,40 @@ export default async function SourcePage({
 
       {/* ── Verdict tally ──────────────────────────────────────────────── */}
       <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-        <Tally label="true" value={counts.true} tone="text-true" />
-        <Tally label="false" value={counts.false} tone="text-false" />
-        <Tally label="could not check" value={counts.void} tone="text-ink-2" />
-        <Tally label="pending" value={counts.pending} tone="text-ink-2" />
+        <Tally label={t("true")} value={counts.true} tone="text-true" locale={locale} />
+        <Tally label={t("false")} value={counts.false} tone="text-false" locale={locale} />
+        <Tally label={t("void")} value={counts.void} tone="text-ink-2" locale={locale} />
+        <Tally label={t("pending")} value={counts.pending} tone="text-ink-2" locale={locale} />
       </dl>
 
       {/* ── Score history ──────────────────────────────────────────────── */}
       {versions.length > 0 && (
         <section className="mt-10">
           <div className="mb-3 flex items-baseline justify-between">
-            <h2 className="label">score history</h2>
-            <span className="text-[11px] text-ink-3">
-              {versions.length} version{versions.length === 1 ? "" : "s"}
-            </span>
+            <h2 className="label">{t("history")}</h2>
+            <span className="text-[11px] text-ink-3">{t("versions", { count: versions.length })}</span>
           </div>
           <Sparkline
             values={versions.map((v) => v.score)}
             labels={versions.map((v) => `v${v.version}`)}
+            locale={locale}
+            caption={t("spark", {
+              from: formatFixed(versions[0]?.score ?? 0, locale),
+              to: formatFixed(versions[versions.length - 1]?.score ?? 0, locale),
+              count: versions.length,
+            })}
+            muteLabel={t("sparkMute")}
+            trustLabel={t("sparkTrust")}
           />
         </section>
       )}
 
       {/* ── Evidence chain ─────────────────────────────────────────────── */}
       <section className="mt-10">
-        <h2 className="label mb-3">evidence chain</h2>
+        <h2 className="label mb-3">{t("chain")}</h2>
 
         {claims.length === 0 ? (
-          <p className="text-[13px] text-ink-3">No claims recorded for this source.</p>
+          <p className="text-[13px] text-ink-3">{t("none")}</p>
         ) : (
           <ol className="space-y-px overflow-hidden rounded-lg border border-line bg-line">
             {claims.map(({ claim, resolution }) => (
@@ -211,17 +252,17 @@ export default async function SourcePage({
                     <VerdictBadge outcome={resolution.outcome} />
                   ) : (
                     <span className="rounded border border-line-strong px-2 py-0.5 text-[11px] text-ink-3">
-                      pending
+                      {t("pending")}
                     </span>
                   )}
                   <span className="mono text-[11px] text-ink-3">{claim.claimType}</span>
                   {claim.synthetic && (
                     <span className="rounded border border-line-strong px-1.5 py-px text-[11px] text-ink-3">
-                      synthetic
+                      {t("synthetic")}
                     </span>
                   )}
                   <span className="mono tnum ml-auto text-[11px] text-ink-3">
-                    {claim.deadline.slice(0, 10)}
+                    {formatDateOnly(claim.deadline, locale)}
                   </span>
                 </div>
 
@@ -233,7 +274,7 @@ export default async function SourcePage({
 
                 {resolution && (
                   <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
-                    {explainVoidReason(resolution.reason)}
+                    {displayReason(voidCopy, resolution.outcome, resolution.reason)}
                   </p>
                 )}
 
@@ -247,7 +288,7 @@ export default async function SourcePage({
                       >
                         <path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
-                      raw evidence
+                      {t("raw")}
                     </summary>
                     <pre className="mono mt-2 max-h-64 overflow-auto rounded-md border border-line bg-surface-0 p-3 text-[11px] leading-relaxed text-ink-2">
 {JSON.stringify(resolution.evidence, null, 2)}
@@ -263,12 +304,14 @@ export default async function SourcePage({
                       rel="noreferrer"
                       className="underline-offset-2 hover:text-ink-2 hover:underline"
                     >
-                      original post
+                      {t("original")}
                     </a>
                   )}
-                  {claim.walrusBlobId && <span>claim {claim.walrusBlobId.slice(0, 14)}…</span>}
+                  {claim.walrusBlobId && (
+                    <span>{t("claimBlob", { id: claim.walrusBlobId.slice(0, 14) })}</span>
+                  )}
                   {resolution?.walrusBlobId && (
-                    <span>verdict {resolution.walrusBlobId.slice(0, 14)}…</span>
+                    <span>{t("verdictBlob", { id: resolution.walrusBlobId.slice(0, 14) })}</span>
                   )}
                 </div>
               </li>
@@ -286,7 +329,21 @@ export default async function SourcePage({
  * and the threshold bands shaded so a drop across the mute line is visible as
  * a crossing rather than a number the reader has to compare.
  */
-function Sparkline({ values, labels }: { values: number[]; labels: string[] }) {
+function Sparkline({
+  values,
+  labels,
+  locale,
+  caption,
+  muteLabel,
+  trustLabel,
+}: {
+  values: number[];
+  labels: string[];
+  locale: Locale;
+  caption: string;
+  muteLabel: string;
+  trustLabel: string;
+}) {
   const W = 720;
   const H = 88;
   const padL = 30;
@@ -310,7 +367,7 @@ function Sparkline({ values, labels }: { values: number[]; labels: string[] }) {
         viewBox={`0 0 ${W} ${H}`}
         className="h-[88px] w-full"
         role="img"
-        aria-label={`Trust moved from ${values[0]?.toFixed(2)} to ${last.toFixed(2)} over ${values.length} versions`}
+        aria-label={caption}
       >
         {/* Threshold bands */}
         <rect x={padL} y={y(TRUST_TRUSTED)} width={innerW} height={padY + innerH - y(TRUST_TRUSTED)} fill="var(--color-accent)" opacity="0.05" />
@@ -334,10 +391,10 @@ function Sparkline({ values, labels }: { values: number[]; labels: string[] }) {
         {/* Range labels, placed in the gutter and staggered so they cannot
             collide when the two thresholds are close together. */}
         <text x={padL - 6} y={y(TRUST_TRUSTED) - 3} textAnchor="end" fontSize="8.5" fill="var(--color-ink-3)" className="mono">
-          trust
+          {trustLabel}
         </text>
         <text x={padL - 6} y={y(TRUST_MUTED) + 9} textAnchor="end" fontSize="8.5" fill="var(--color-ink-3)" className="mono">
-          mute
+          {muteLabel}
         </text>
 
         {/* Area + line */}
@@ -356,7 +413,7 @@ function Sparkline({ values, labels }: { values: number[]; labels: string[] }) {
           fill="var(--color-ink)"
           className="mono"
         >
-          {last.toFixed(2)}
+          {formatFixed(last, locale)}
         </text>
       </svg>
 
@@ -369,11 +426,64 @@ function Sparkline({ values, labels }: { values: number[]; labels: string[] }) {
   );
 }
 
-function Tally({ label, value, tone }: { label: string; value: number; tone: string }) {
+function Tally({
+  label,
+  value,
+  tone,
+  locale,
+}: {
+  label: string;
+  value: number;
+  tone: string;
+  locale: Locale;
+}) {
   return (
     <div className={`bg-surface-1 px-4 py-3 ${value === 0 ? "opacity-45" : ""}`}>
       <dt className="label">{label}</dt>
-      <dd className={`tnum mt-1.5 text-[19px] font-medium ${tone}`}>{value}</dd>
+      <dd className={`tnum mt-1.5 text-[19px] font-medium ${tone}`}>{formatCount(value, locale)}</dd>
     </div>
   );
+}
+
+async function uiLocale(): Promise<Locale> {
+  const value = await getLocale();
+  return isLocale(value) ? value : "en";
+}
+
+function displayReason(
+  t: Awaited<ReturnType<typeof getTranslations<"voidReason">>>,
+  outcome: "true" | "false" | "void",
+  reason: string,
+): string {
+  const explained = explainVoidReason(reason);
+  if (outcome !== "void") return explained;
+  return translatedVoid(t, explained);
+}
+
+function translatedVoid(
+  t: Awaited<ReturnType<typeof getTranslations<"voidReason">>>,
+  reason: string,
+): string {
+  const match = matchVoidReason(reason);
+  if (!match) return reason;
+  switch (match.key) {
+    case "deadline":
+      return t("deadline", { deadline: match.deadline });
+    case "placeholder":
+      return t("placeholder", { address: match.address });
+    case "manual":
+      return t("manual");
+    case "unknownType":
+      return t("unknownType", { type: match.type });
+    case "checkFailed":
+      return t("checkFailed", { message: match.message });
+    case "noSnapshot":
+      return t("noSnapshot");
+    case "replayTruncated":
+      return t("replayTruncated", voidReasonValues(match));
+    case "rateUnsupported":
+      return t("rateUnsupported", { pair: match.pair });
+    case "synthetic":
+      return t("synthetic");
+  }
 }

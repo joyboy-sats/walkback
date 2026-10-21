@@ -8,7 +8,10 @@
  * Design: the blob log is the object. It is rendered as a dense ledger table
  * with tabular figures so the id column scans as a column, not as noise.
  */
+import { getLocale, getTranslations } from "next-intl/server";
 import { apiGet } from "@/lib/public-api";
+import { formatCount } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
 import RebuildButton from "./rebuild-button";
 import { ArchiveIllustration, LedgerIllustration } from "@/components/illustrations";
 import { HaloBadge } from "@/components/ui/halo-badge";
@@ -29,6 +32,8 @@ export const dynamic = "force-dynamic";
 const KIND_ORDER = ["source", "claim", "resolution", "score", "digest", "tombstone"];
 
 export default async function MemoryPage() {
+  const t = await getTranslations("memory");
+  const locale = await uiLocale();
   let view: MemoryView | null = null;
   let loadError: string | null = null;
   try {
@@ -67,18 +72,14 @@ export default async function MemoryPage() {
           <div>
             <div className="mb-3 flex flex-wrap items-center gap-2.5">
               <HaloBadge variant="secondary" tabularNums live>
-                {rows.length} memories
+                {t("badge", { count: rows.length })}
               </HaloBadge>
-              <span className="label">Walrus Memory · mainnet</span>
+              <span className="label">{t("network")}</span>
             </div>
             <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.025em]">
-              The ledger behind the ledger.
+              {t("title")}
             </h1>
-            <p className="mt-3 max-w-[58ch] text-[14px] leading-relaxed text-ink-2">
-              Every claim, verdict and score version is written to Walrus Memory on
-              mainnet. Walrus is the system of record; the Postgres tables the rest
-              of the app reads are a rebuildable projection of it.
-            </p>
+            <p className="mt-3 max-w-[58ch] text-[14px] leading-relaxed text-ink-2">{t("body")}</p>
           </div>
           <div className="hidden justify-self-end sm:block">
             <ArchiveIllustration className="h-[130px] w-[165px]" />
@@ -88,20 +89,20 @@ export default async function MemoryPage() {
 
       {/* ── KPI ────────────────────────────────────────────────────────── */}
       <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-        <Kpi label="memories" value={String(rows.length)} />
-        <Kpi label="namespaces" value={String(Object.keys(byNamespace).length)} />
-        <Kpi label="kinds" value={String(Object.keys(byKind).length)} />
+        <Kpi label={t("memories")} value={formatCount(rows.length, locale)} />
+        <Kpi label={t("namespaces")} value={formatCount(Object.keys(byNamespace).length, locale)} />
+        <Kpi label={t("kinds")} value={formatCount(Object.keys(byKind).length, locale)} />
         <Kpi
-          label="score versions"
-          value={String(byKind.score ?? 0)}
-          hint="not decrypted on rebuild"
+          label={t("scores")}
+          value={formatCount(byKind.score ?? 0, locale)}
+          hint={t("scoresHint")}
         />
       </dl>
 
       {/* ── Kind distribution ──────────────────────────────────────────── */}
       {rows.length > 0 && (
         <section className="mt-5">
-          <p className="label mb-2.5">distribution</p>
+          <p className="label mb-2.5">{t("distribution")}</p>
           <div className="flex flex-wrap gap-1.5">
             {KIND_ORDER.filter((k) => byKind[k]).map((k) => (
               <span
@@ -109,7 +110,7 @@ export default async function MemoryPage() {
                 className="inline-flex items-center gap-2 rounded-md border border-line bg-surface-1 px-2.5 py-1.5"
               >
                 <span className="mono text-[11px] text-ink-2">{k}</span>
-                <span className="tnum text-[12px] font-medium">{byKind[k]}</span>
+                <span className="tnum text-[12px] font-medium">{formatCount(byKind[k] ?? 0, locale)}</span>
               </span>
             ))}
             {Object.keys(byKind)
@@ -120,7 +121,7 @@ export default async function MemoryPage() {
                   className="inline-flex items-center gap-2 rounded-md border border-line bg-surface-1 px-2.5 py-1.5"
                 >
                   <span className="mono text-[11px] text-ink-3">{k}</span>
-                  <span className="tnum text-[12px] font-medium">{byKind[k]}</span>
+                  <span className="tnum text-[12px] font-medium">{formatCount(byKind[k] ?? 0, locale)}</span>
                 </span>
               ))}
           </div>
@@ -132,18 +133,16 @@ export default async function MemoryPage() {
         <div className="border-b border-line bg-surface-1 px-4 py-3">
           <div className="flex items-center gap-2">
             <LedgerIllustration className="h-4 w-5 text-ink-3" muted />
-            <h2 className="text-[14px] font-medium">Verify against Walrus</h2>
+            <h2 className="text-[14px] font-medium">{t("verifyTitle")}</h2>
           </div>
-          <p className="mt-1 text-[12px] leading-relaxed text-ink-2">
-            Pages the relayer inventory and compares it with Postgres, record by
-            record. Replacing the projection stays unavailable until every live
-            product-namespace memory was read, the rebuild would not shrink any
-            table, and no seed post is unfinished.
-          </p>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-2">{t("verifyBody")}</p>
         </div>
         <div className="bg-surface-0 px-4 py-4">
           {loadError ? (
-            <p className="text-[13px] text-false">{loadError}</p>
+            <div>
+              <p className="label mb-1.5 text-false">{t("apiDown")}</p>
+              <p className="text-[13px] text-ink-2">{loadError}</p>
+            </div>
           ) : (
             <p className="mb-4 text-[11px] leading-relaxed text-ink-3">{limitation}</p>
           )}
@@ -154,25 +153,21 @@ export default async function MemoryPage() {
       {/* ── Blob log ───────────────────────────────────────────────────── */}
       <section className="mt-10">
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="label">written</h2>
-          <span className="text-[11px] text-ink-3">
-            newest first · {rows.length} row{rows.length === 1 ? "" : "s"}
-          </span>
+          <h2 className="label">{t("written")}</h2>
+          <span className="text-[11px] text-ink-3">{t("rows", { count: rows.length })}</span>
         </div>
 
         {rows.length === 0 ? (
-          <p className="text-[13px] text-ink-3">
-            No memories in the projection yet. Ingest a post to write the first one.
-          </p>
+          <p className="text-[13px] text-ink-3">{t("empty")}</p>
         ) : (
           <div className="overflow-hidden rounded-xl border border-line">
             <table className="w-full border-collapse text-left">
               <thead>
                 <tr className="border-b border-line bg-surface-1">
-                  <th className="label px-3 py-2 font-medium">kind</th>
-                  <th className="label hidden px-3 py-2 font-medium sm:table-cell">namespace</th>
-                  <th className="label px-3 py-2 font-medium">blob</th>
-                  <th className="label hidden px-3 py-2 font-medium md:table-cell">preview</th>
+                  <th className="label px-3 py-2 font-medium">{t("colKind")}</th>
+                  <th className="label hidden px-3 py-2 font-medium sm:table-cell">{t("colNamespace")}</th>
+                  <th className="label px-3 py-2 font-medium">{t("colBlob")}</th>
+                  <th className="label hidden px-3 py-2 font-medium md:table-cell">{t("colPreview")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -206,6 +201,11 @@ export default async function MemoryPage() {
       </section>
     </div>
   );
+}
+
+async function uiLocale(): Promise<Locale> {
+  const value = await getLocale();
+  return isLocale(value) ? value : "en";
 }
 
 function Kpi({ label, value, hint }: { label: string; value: string; hint?: string }) {

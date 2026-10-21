@@ -70,6 +70,23 @@ export function trustBand(score: number, adjudicated: number): TrustBand {
   return "normal";
 }
 
+/**
+ * Whether the feed should hide this source's claims.
+ *
+ * The stored `muted` flag is a projection of a past band. A source with fewer
+ * than {@link MIN_SAMPLE} true/false verdicts is unrated: a stored 0 and a
+ * stray mute must not hide it. This does not change the stored score.
+ */
+export function sourceIsMuted(storedMuted: boolean, adjudicated: number): boolean {
+  if (adjudicated < MIN_SAMPLE) return false;
+  return storedMuted;
+}
+
+/** A numeric score is shown only once the sample can support a band. */
+export function scoreIsShown(adjudicated: number): boolean {
+  return adjudicated >= MIN_SAMPLE;
+}
+
 export interface ScoreSnapshot {
   hits: number;
   misses: number;

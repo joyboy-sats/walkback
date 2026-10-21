@@ -10,6 +10,20 @@ so you literally see less of them tomorrow.**
 Built for the **Walrus x Tatum "Total Recall" Memory Hackathon** (Track 2:
 Smart Agents for Real Life).
 
+## Disclaimer
+
+Walkback audits public claims against onchain data. A low score means the claims we could check did not hold — not that the person is dishonest. Scores cover only the claims in this ledger, not the whole account.
+
+## Methodology
+
+Walkback scores only claims it can check. The closed set is `balance_threshold` (current balance via `suix_getBalance`), `balance_change_since_ingest` (the snapshot taken at ingest, compared with the balance at the deadline), `tx_replay` (`suix_queryTransactionBlocks` with `showBalanceChanges`), `price_threshold` (Tatum historical USD candles over the claim's window), and `manual` (a human verdict, used as a demo fallback). Anything outside that set is rejected before it is stored.
+
+A verdict is `true` or `false` when that check decides the claim. `void` means the claim could not be verified: the deadline has not passed, there was no snapshot, the address is a placeholder, the candle series does not cover the pair or the window, the replay window was truncated or a transfer could not be read, or the check failed. A void is not a lie. It does not count as a hit or a miss, and it does not move the score.
+
+The number is the lower bound of a 95% Wilson score interval over hits and misses. It is not a raw hit rate and not a model call. One correct guess is not evidence: 1 hit out of 1 claim is about 0.21, and 8 out of 10 is about 0.49.
+
+The mute threshold is 0.40 and the trust threshold is 0.55. Once at least 3 claims have been adjudicated, a bound below 0.40 mutes the source and its claims leave the feed. A bound of 0.55 or higher is trusted. Below 3 adjudicated claims the source is unrated: the UI shows an em dash instead of a number, plus how many verdicts are still needed, and the source is not muted — even when the stored bound is 0.
+
 ---
 
 ## Status

@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { askAdminToken, clearAdminToken } from "@/lib/admin-token";
+import { formatCount, formatDateOnly, formatFixed, formatTimestamp } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
 import { apiPost, pollJob } from "@/lib/public-api";
 import { ReceiptIllustration, SealIllustration } from "@/components/illustrations";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { HaloBadge } from "@/components/ui/halo-badge";
-import { ArrowRight } from "lucide-react";
 
 /**
  * Paste a post and see exactly what ingest kept.
@@ -45,7 +48,20 @@ interface IngestResponse {
 
 const PLATFORMS: Platform[] = ["x", "substack", "rss", "onchain", "other"];
 
+function useUiLocale(): Locale {
+  const value = useLocale();
+  return isLocale(value) ? value : "en";
+}
+
+function platformLabel(platform: Platform, t: ReturnType<typeof useTranslations<"ingest">>): string {
+  if (platform === "other") return t("platformOther");
+  if (platform === "onchain") return t("platformOnchain");
+  return platform;
+}
+
 export default function IngestPage() {
+  const t = useTranslations("ingest");
+  const locale = useUiLocale();
   const [handle, setHandle] = useState("");
   const [platform, setPlatform] = useState<Platform>("x");
   const [publishedAt, setPublishedAt] = useState("");
@@ -82,12 +98,12 @@ export default function IngestPage() {
     const address = suiAddress.trim();
     if (address && !/^0x[0-9a-fA-F]{1,64}$/.test(address)) {
       setPhase("error");
-      setError("Sui address must be 0x followed by hex.");
+      setError(t("addressError"));
       return;
     }
     if (!publishedAt) {
       setPhase("error");
-      setError("Published time is required. It anchors any deadline in the post.");
+      setError(t("publishedRequired"));
       return;
     }
 
@@ -96,7 +112,7 @@ export default function IngestPage() {
     setJobStatus(null);
 
     try {
-      const token = askAdminToken();
+      const token = askAdminToken({ prompt: t("tokenPrompt"), required: t("tokenRequired") });
       const res = await apiPost(
         "/ingest",
         {
@@ -110,16 +126,16 @@ export default function IngestPage() {
       );
       if (res.status === 401) {
         clearAdminToken();
-        throw new Error("Admin token was rejected. Submit again and enter the Coolify ADMIN_TOKEN.");
+        throw new Error(t("tokenRejected"));
       }
       if (res.status >= 400 || !res.body?.jobId) {
-        throw new Error(res.body?.detail || res.body?.error || `ingest failed (${res.status})`);
+        throw new Error(res.body?.detail || res.body?.error || t("requestFailed", { status: res.status }));
       }
       const job = await pollJob(res.body.jobId, setJobStatus, () => cancel.current);
-      if (job.status === "failed") throw new Error(job.error || "ingest failed");
+      if (job.status === "failed") throw new Error(job.error || t("failedJob"));
       const done = job.result as IngestResponse | null;
       if (!done || !Array.isArray(done.claims)) {
-        throw new Error("ingest finished without a result");
+        throw new Error(t("noResult"));
       }
       setResult(done);
       setPhase("done");
@@ -147,22 +163,15 @@ export default function IngestPage() {
         <div className="relative grid items-center gap-6 px-6 py-7 sm:grid-cols-[1fr_200px] sm:px-8">
           <div>
             <div className="mb-3 flex flex-wrap items-center gap-2.5">
-              <HaloBadge variant="secondary">ingest</HaloBadge>
-              <span className="label">extract · snapshot · write</span>
+              <HaloBadge variant="secondary">{t("badge")}</HaloBadge>
+              <span className="label">{t("kicker")}</span>
             </div>
             <h1 className="text-[28px] font-semibold leading-[1.15] tracking-[-0.025em]">
-              Turn a post into a receipt.
+              {t("title")}
             </h1>
-            <p className="mt-3 max-w-[56ch] text-[14px] leading-relaxed text-ink-2">
-              Walkback extracts claims that can be checked against Sui, freezes a
-              balance snapshot at this moment, and writes each one to Walrus
-              Memory. Most posts contain nothing checkable — that comes back as
-              zero claims, not as an error.
-            </p>
+            <p className="mt-3 max-w-[56ch] text-[14px] leading-relaxed text-ink-2">{t("body")}</p>
             <p className="mt-2 max-w-[56ch] text-[12px] leading-relaxed text-ink-3">
-              The first write in a tab asks for the admin token (ADMIN_TOKEN on the
-              Coolify backend). The browser keeps it in sessionStorage and sends it
-              as <span className="mono">x-admin-token</span>. Vercel stores nothing.
+              {t("tokenBefore")} <span className="mono">x-admin-token</span>{t("tokenAfter")}
             </p>
           </div>
           <div className="hidden justify-self-end sm:block">
@@ -172,9 +181,9 @@ export default function IngestPage() {
       </section>
 
       {/* ── Form ───────────────────────────────────────────────────────── */}
-      <form onSubmit={onSubmit} className="max-w-2xl space-y-5">
+      <form onSubmit={onSubmit} className="space-y-5">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="handle" hint="who is speaking">
+          <Field label={t("handle")} hint={t("handleHint")}>
             <input
               required
               value={handle}
@@ -186,38 +195,37 @@ export default function IngestPage() {
             />
           </Field>
 
-          <Field label="platform">
-            <div className="flex gap-1">
+          <Field label={t("platform")}>
+            <div className="flex flex-wrap gap-1">
               {PLATFORMS.map((p) => (
                 <button
                   key={p}
                   type="button"
                   disabled={working}
                   onClick={() => setPlatform(p)}
-                  className={`flex-1 rounded-md border px-2 py-2 text-[12px] transition-colors ${
+                  className={`min-w-[4.25rem] flex-1 rounded-md border px-2 py-2 text-[12px] transition-colors ${
                     platform === p
                       ? "border-accent/60 bg-accent/10 text-ink"
                       : "border-line bg-surface-1 text-ink-3 hover:border-line-strong hover:text-ink-2"
                   } disabled:opacity-50`}
                 >
-                  {p}
+                  {platformLabel(p, t)}
                 </button>
               ))}
             </div>
           </Field>
 
-          <Field label="published at" hint="anchors relative deadlines">
-            <input
-              required
-              type="datetime-local"
+          <Field label={t("published")} hint={t("publishedHint")} htmlFor="published-at">
+            <DateTimePicker
+              id="published-at"
               value={publishedAt}
-              onChange={(e) => setPublishedAt(e.target.value)}
+              onChange={setPublishedAt}
               disabled={working}
               className={inputClass}
             />
           </Field>
 
-          <Field label="Sui address" hint="optional — needed to take a receipt">
+          <Field label={t("address")} hint={t("addressHint")}>
             <input
               value={suiAddress}
               onChange={(e) => setSuiAddress(e.target.value)}
@@ -229,7 +237,7 @@ export default function IngestPage() {
           </Field>
         </div>
 
-        <Field label="post" hint="verbatim, including typos">
+        <Field label={t("post")} hint={t("postHint")}>
           <textarea
             required
             value={text}
@@ -237,10 +245,10 @@ export default function IngestPage() {
             disabled={working}
             rows={8}
             className={inputClass}
-            placeholder="Paste the post."
+            placeholder={t("placeholder")}
           />
           <span className="mt-1.5 block text-right text-[11px] text-ink-3 tnum">
-            {text.length} / 20000
+            {formatCount(text.length, locale)} / {formatCount(20000, locale)}
           </span>
         </Field>
 
@@ -250,7 +258,7 @@ export default function IngestPage() {
             disabled={working}
             className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-50"
           >
-            {working ? "Working…" : "Extract and store"}
+            {working ? t("working") : t("submit")}
             {!working && (
               <svg viewBox="0 0 12 12" className="h-3 w-3" aria-hidden="true">
                 <path d="M2.5 6h7M6.5 3l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -258,53 +266,60 @@ export default function IngestPage() {
             )}
           </button>
           {working && (
-            <span className="text-[12px] text-ink-3 tnum">{elapsed}s elapsed</span>
+            <span className="text-[12px] text-ink-3 tnum">{t("elapsed", { seconds: elapsed })}</span>
           )}
         </div>
       </form>
 
       {/* ── Progress ───────────────────────────────────────────────────── */}
       {working && (
-        <div className="mt-6 max-w-2xl" aria-busy="true">
+        <div className="mt-6" aria-busy="true">
           <div className="pending-bar">
             <span />
           </div>
           <p className="mt-3 text-[12px] leading-relaxed text-ink-2">
             {jobStatus === "pending"
-              ? "Queued for the worker."
-              : `Working${jobStatus ? ` (${jobStatus})` : ""}. Extraction is quick; each memory write to Walrus takes about 6 seconds.`}
+              ? t("queued")
+              : t("workingDetail", {
+                  status:
+                    jobStatus === "running"
+                      ? t("statusRunning")
+                      : jobStatus === "pending"
+                        ? t("statusPending")
+                        : (jobStatus ?? "none"),
+                })}
           </p>
         </div>
       )}
 
       {phase === "error" && error && (
-        <div className="mt-6 max-w-2xl rounded-lg border border-false/30 bg-false/5 p-4">
-          <p className="label mb-1 text-false">Failed</p>
+        <div className="mt-6 rounded-lg border border-false/30 bg-false/5 p-4">
+          <p className="label mb-1 text-false">{t("failed")}</p>
           <p className="text-[13px] text-ink-2">{error}</p>
         </div>
       )}
 
-      {phase === "done" && result && <Result result={result} />}
+      {phase === "done" && result && <Result result={result} locale={locale} />}
     </div>
   );
 }
 
-function Result({ result }: { result: IngestResponse }) {
+function Result({ result, locale }: { result: IngestResponse; locale: Locale }) {
+  const t = useTranslations("ingest");
   const count = result.claims.length;
   const empty = count === 0;
 
   return (
-    <div className="mt-10 max-w-2xl space-y-8">
+    <div className="mt-10 space-y-8">
       {/* Summary */}
       <section>
         <div className="flex items-baseline gap-3">
           <h2 className="text-[20px] font-semibold tracking-[-0.01em]">
-            {empty ? "0 claims extracted" : `${count} claim${count === 1 ? "" : "s"} extracted`}
+            {empty ? t("extractedZero") : t("extracted", { count })}
           </h2>
           {!empty && (
             <span className="text-[12px] text-ink-3">
-              {result.memoryBlobIds.length} memor
-              {result.memoryBlobIds.length === 1 ? "y" : "ies"} written
+              {t("memoriesWritten", { count: result.memoryBlobIds.length })}
             </span>
           )}
         </div>
@@ -313,11 +328,7 @@ function Result({ result }: { result: IngestResponse }) {
           <div className="mt-3 rounded-lg border border-line bg-surface-1 p-4">
             <div className="flex items-start gap-4">
               <SealIllustration className="hidden h-12 w-14 shrink-0 sm:block" muted />
-              <p className="text-[13px] leading-relaxed text-ink-2">
-                Nothing in this post was checkable. That is a normal result, not a
-                failure — most text contains no falsifiable claim about onchain
-                state. The source was still recorded.
-              </p>
+              <p className="text-[13px] leading-relaxed text-ink-2">{t("emptyResult")}</p>
             </div>
           </div>
         )}
@@ -332,12 +343,14 @@ function Result({ result }: { result: IngestResponse }) {
                   </span>
                   {c.synthetic && (
                     <span className="rounded border border-line-strong px-1.5 py-0.5 text-ink-3">
-                      synthetic
+                      {t("synthetic")}
                     </span>
                   )}
-                  <span className="mono tnum text-ink-3">due {c.deadline.slice(0, 10)}</span>
+                  <span className="mono tnum text-ink-3">
+                    {t("due", { date: formatDateOnly(c.deadline, locale) })}
+                  </span>
                   <span className="mono tnum ml-auto text-ink-3">
-                    conf {c.confidence.toFixed(2)}
+                    {t("confidence", { value: formatFixed(c.confidence, locale) })}
                   </span>
                 </div>
                 <blockquote className="mt-2 text-[14px] leading-[1.6]">
@@ -354,7 +367,7 @@ function Result({ result }: { result: IngestResponse }) {
       {/* Rejected */}
       {result.rejected.length > 0 && (
         <section>
-          <h2 className="label mb-2.5">rejected</h2>
+          <h2 className="label mb-2.5">{t("rejected")}</h2>
           <ul className="space-y-px overflow-hidden rounded-xl border border-line bg-line">
             {result.rejected.map((r, i) => (
               <li key={i} className="bg-surface-1 px-4 py-3">
@@ -372,19 +385,19 @@ function Result({ result }: { result: IngestResponse }) {
 
       {/* Snapshot */}
       <section>
-        <h2 className="label mb-2.5">receipt</h2>
+        <h2 className="label mb-2.5">{t("receipt")}</h2>
         {result.snapshot ? (
           <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-            <Stat label="balance" value={result.snapshot.balance} mono />
-            <Stat label="asset" value={result.snapshot.asset} mono />
-            <Stat label="as of" value={result.snapshot.asOf.slice(0, 19).replace("T", " ")} mono />
+            <Stat label={t("balance")} value={result.snapshot.balance} mono />
+            <Stat label={t("asset")} value={result.snapshot.asset} mono />
+            <Stat label={t("asOf")} value={formatTimestamp(result.snapshot.asOf, locale)} mono />
             <Stat
-              label="checkpoint"
+              label={t("checkpoint")}
               value={result.snapshot.checkpoint ?? "—"}
               mono
             />
             <div className="col-span-2 bg-surface-1 px-4 py-3 sm:col-span-4">
-              <dt className="label">address</dt>
+              <dt className="label">{t("addressLabel")}</dt>
               <dd className="mono mt-1 break-all text-[12px] text-ink-2">
                 {result.snapshot.address}
               </dd>
@@ -392,20 +405,16 @@ function Result({ result }: { result: IngestResponse }) {
           </dl>
         ) : (
           <div className="rounded-lg border border-line bg-surface-1 p-4">
-            <p className="text-[13px] leading-relaxed text-ink-2">
-              No snapshot was taken. Without a Sui address there is no receipt,
-              and a change-over-time claim cannot be checked later — it will
-              resolve to void rather than be guessed.
-            </p>
+            <p className="text-[13px] leading-relaxed text-ink-2">{t("noSnapshot")}</p>
           </div>
         )}
       </section>
 
       {/* Blobs */}
       <section>
-        <h2 className="label mb-2.5">written to Walrus</h2>
+        <h2 className="label mb-2.5">{t("written")}</h2>
         {result.memoryBlobIds.length === 0 ? (
-          <p className="text-[13px] text-ink-3">No memories were written.</p>
+          <p className="text-[13px] text-ink-3">{t("noneWritten")}</p>
         ) : (
           <ul className="space-y-px overflow-hidden rounded-xl border border-line bg-line">
             {result.memoryBlobIds.map((id) => (
@@ -424,17 +433,39 @@ function Field({
   label,
   hint,
   children,
+  htmlFor,
 }: {
   label: string;
   hint?: string;
   children: React.ReactNode;
+  /** Caption points at a control that cannot sit inside the label (the date button). */
+  htmlFor?: string;
 }) {
+  const caption = (
+    <span className="mb-1.5 flex items-baseline gap-2">
+      {htmlFor ? (
+        <label htmlFor={htmlFor} className="label">
+          {label}
+        </label>
+      ) : (
+        <span className="label">{label}</span>
+      )}
+      {hint && <span className="text-[11px] text-ink-3">{hint}</span>}
+    </span>
+  );
+
+  if (htmlFor) {
+    return (
+      <div>
+        {caption}
+        {children}
+      </div>
+    );
+  }
+
   return (
     <label className="block">
-      <span className="mb-1.5 flex items-baseline gap-2">
-        <span className="label">{label}</span>
-        {hint && <span className="text-[11px] text-ink-3">{hint}</span>}
-      </span>
+      {caption}
       {children}
     </label>
   );

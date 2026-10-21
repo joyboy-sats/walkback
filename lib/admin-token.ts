@@ -19,14 +19,17 @@ export function clearAdminToken(): void {
 }
 
 /** Prompt when this tab has no token yet. Throws if the owner dismisses it. */
-export function askAdminToken(): string {
+export function askAdminToken(copy?: { prompt?: string; required?: string }): string {
   const existing = getAdminToken();
   if (existing) return existing;
   const entered = window.prompt(
-    "Admin token for writes. This is ADMIN_TOKEN on the Coolify backend. It stays in this tab only.",
+    copy?.prompt ??
+      "Admin token for writes. This is ADMIN_TOKEN on the Coolify backend. It stays in this tab only.",
   );
   const token = entered?.trim() ?? "";
-  if (!token) throw new Error("Admin token is required to enqueue a write.");
+  if (!token) {
+    throw new Error(copy?.required ?? "Admin token is required to enqueue a write.");
+  }
   sessionStorage.setItem(STORAGE_KEY, token);
   return token;
 }
