@@ -305,6 +305,10 @@ export interface SeedSummaryInput {
   blobIds: string[];
   scores: Array<{ handle: string; score: number; hits: number; misses: number }>;
   resolveErrors: Array<{ claimId: string; error: string }>;
+  /** Posts or phases that threw. The applied marker was not set for these posts. */
+  failures?: Array<{ step: string; error: string }>;
+  /** Posts left for a rerun because an earlier step timed out. */
+  notAttempted?: string[];
 }
 
 /** Human-readable summary. The script prints this and nothing else at the end. */
@@ -340,6 +344,16 @@ export function formatSeedSummary(s: SeedSummaryInput): string {
     lines.push("resolve errors");
     for (const e of s.resolveErrors) lines.push(`  ${e.claimId}  ${e.error}`);
   }
+  if (s.failures?.length) {
+    lines.push("failed");
+    for (const failure of s.failures) lines.push(`  ${failure.step}  ${failure.error}`);
+  }
+  if (s.notAttempted?.length) {
+    lines.push("not attempted");
+    for (const id of s.notAttempted) lines.push(`  ${id}`);
+  }
+  const incomplete = Boolean(s.failures?.length || s.notAttempted?.length || s.resolveErrors.length);
+  lines.push(`status     ${incomplete ? "incomplete" : "ok"}`);
   return lines.join("\n");
 }
 

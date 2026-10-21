@@ -20,6 +20,7 @@ import "server-only";
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { withRetry } from "./bounded";
 import { env, isReplay } from "./env";
 import { RateLimiter } from "./ratelimit";
 
@@ -369,6 +370,11 @@ export async function netChangeInWindow(
   };
 }
 
+/** One rate attempt. 404 and a null value are answers, not failures. */
+const RATE_TIMEOUT_MS = 8_000;
+const RATE_ATTEMPTS = 3;
+const RATE_BACKOFF_MS = 400;
+
 /** Spot price. Returns undefined when the pair is unsupported. */
 export async function getRate(symbol: string, basePair: string): Promise<number | undefined> {
   const e = env();
@@ -379,10 +385,24 @@ export async function getRate(symbol: string, basePair: string): Promise<number 
     return fx.value;
   }
 
-  const url = `${e.TATUM_RATE_URL}?symbol=${encodeURIComponent(symbol)}&basePair=${encodeURIComponent(basePair)}`;
+  // 404 and a null value return undefined and are not retried. A 5xx, 429, or
+  // a fetch that hits its own 8s abort is retried with backoff, three times.
+  return withRetry(() => requestRate(e.TATUM_API_KEY!, e.TATUM_RATE_URL, symbol, basePair), {
+    attempts: RATE_ATTEMPTS,
+    backoffMs: RATE_BACKOFF_MS,
+  });
+}
+
+async function requestRate(
+  apiKey: string,
+  rateUrl: string,
+  symbol: string,
+  basePair: string,
+): Promise<number | undefined> {
+  const url = `${rateUrl}?symbol=${encodeURIComponent(symbol)}&basePair=${encodeURIComponent(basePair)}`;
   const res = await fetch(url, {
-    headers: { "x-api-key": e.TATUM_API_KEY },
-    signal: AbortSignal.timeout(8_000),
+    headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(RATE_TIMEOUT_MS),
   });
 
   // The endpoint 404s (or returns a null value) for unsupported pairs. That is

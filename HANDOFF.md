@@ -124,6 +124,40 @@ npm run seed
 npm run list:memories
 ```
 
+Stdout names the post (`post 3/17 <id>`), each memory write as it starts and
+as it finishes (elapsed milliseconds and blob id), then the resolve phase,
+then the summary. Exit 0 prints `status ok`. A non-zero exit prints
+`status incomplete`, a `failed` list, and `not attempted` when a timeout
+stopped the run before later posts. The process closes the database pool and
+exits. A prompt coming back is the seed finishing.
+
+### Rerun after an interrupted seed
+
+A seed that died or timed out is safe to run again. Do not delete projection
+rows or Walrus memories first.
+
+The applied marker (`seed_posts.applied_at`) is written only after every
+memory for that post has been recorded. A rerun skips a post whose marker is
+set. A post that was inserted and then interrupted still has its claim rows;
+the rerun writes only the memories that have no blob id, with the same
+idempotency keys (`source:{id}`, `claim:{id}`). The relayer collapses a retry
+of a key it already accepted, so the rerun does not append a second copy.
+Posts listed as `not attempted` were never started; the rerun runs them.
+
+What hung the first production run: `rememberAndWait`'s `timeoutMs` bounds the
+status poll only. Before that poll starts, the SDK builds a SEAL session by
+reading the package object from Sui (`SessionKey.create` → `getObject`), and
+that read has no deadline. A stalled fullnode call never rejects, so the seed
+printed nothing and the next claim was never inserted. Writes are now wrapped
+in a deadline that aborts the fetch, retried with backoff on the same
+idempotency key, and a timed-out post is left unmarked. The worker's ingest
+and resolve writes go through the same wrapper.
+
+Run the command above again in the worker container, on the image that
+contains this fix. Then `npm run list:memories`. If the exit code is still
+non-zero, the summary names the post or claim that failed; leave the rows in
+place and run `npm run seed` once more.
+
 On an empty delegate that accepts every write, the run adds 7 source memories,
 17 claim memories, 11 resolution memories, and one score memory per replay
 verdict that is `true` or `false`. A `void` writes a resolution and no score.
@@ -204,6 +238,9 @@ Do not leave it half-working.
 ## Things that will bite
 
 1. `remember()` has no `blob_id`. Use `rememberAndWait` or `rememberBulkAndWait`.
+   That call's `timeoutMs` does not cover SEAL session setup (`getObject`).
+   `writeMemory` adds the deadline. Do not call `rememberAndWait` from anywhere
+   else.
 2. `getPublicKeyHex()` is async.
 3. Never write memories inside a page render or a request a user waits on.
 4. `void` is not `false`. Every UI string must respect that or the trust model
