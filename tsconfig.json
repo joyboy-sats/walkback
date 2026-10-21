@@ -39,6 +39,7 @@
     "worker/**/*.ts",
     "app/**/*.ts",
     "app/**/*.tsx",
+    "i18n/**/*.ts",
     "next.config.ts",
     "drizzle.config.ts",
     ".next/types/**/*.ts",

@@ -11,8 +11,11 @@
  *
  * Server component. Rows come from the Coolify API over HTTP.
  */
+import { getLocale, getTranslations } from "next-intl/server";
 import { apiGet } from "@/lib/public-api";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, trustBand } from "@/lib/score";
+import { formatCount, formatDateOnly, formatFixed } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
 import VerdictBadge from "@/components/verdict-badge";
 import { TrustMeter, TrustReadout } from "@/components/trust-meter";
 import {
@@ -48,6 +51,8 @@ interface FeedRow {
 export const dynamic = "force-dynamic";
 
 export default async function FeedPage() {
+  const t = await getTranslations("feed");
+  const locale = await uiLocale();
   let rows: FeedRow[] = [];
   let loadError: string | null = null;
   try {
@@ -79,28 +84,28 @@ export default async function FeedPage() {
           <div>
             <div className="mb-3 flex flex-wrap items-center gap-2.5">
               <HaloBadge variant="secondary" tabularNums live={pending > 0}>
-                {pending > 0 ? `${pending} pending` : "ledger live"}
+                {pending > 0 ? t("pendingCount", { count: pending }) : t("live")}
               </HaloBadge>
-              <span className="label">Walrus Memory · mainnet</span>
+              <span className="label">{t("network")}</span>
             </div>
             <h1 className="text-[30px] font-semibold leading-[1.12] tracking-[-0.03em] sm:text-[34px]">
-              Claims, ranked by
-              <br className="hidden sm:block" /> who has been right.
+              {t("titleLead")}
+              <br className="hidden sm:block" />
+              {locale === "en" ? " " : ""}
+              {t("titleRest")}
             </h1>
             <p className="mt-3 max-w-[54ch] text-[14px] leading-relaxed text-ink-2">
-              A source falls below {TRUST_MUTED.toFixed(2)} and its claims stop
-              appearing here. Trust is a Wilson lower bound over adjudicated
-              claims — one correct guess is not evidence.
+              {t("intro", { mute: formatFixed(TRUST_MUTED, locale) })}
             </p>
             <div className="mt-5 flex flex-wrap items-center gap-2">
               <Button asChild size="sm" className="gap-1.5">
                 <a href="/ingest">
-                  Ingest a post
+                  {t("ingest")}
                   <ArrowRight className="h-3.5 w-3.5" />
                 </a>
               </Button>
               <Button asChild size="sm" variant="ghost" className="gap-1.5 text-ink-2">
-                <a href="/memory">Inspect the memory log</a>
+                <a href="/memory">{t("inspect")}</a>
               </Button>
             </div>
           </div>
@@ -112,13 +117,13 @@ export default async function FeedPage() {
 
         {/* Stat strip */}
         <div className="relative grid grid-cols-2 gap-px border-t border-line bg-line sm:grid-cols-4">
-          <Kpi label="claims shown" value={String(visible.length)} />
-          <Kpi label="resolved" value={String(resolved)} />
-          <Kpi label="pending" value={String(pending)} hint="awaiting deadline" />
+          <Kpi label={t("shown")} value={formatCount(visible.length, locale)} />
+          <Kpi label={t("resolved")} value={formatCount(resolved, locale)} />
+          <Kpi label={t("pending")} value={formatCount(pending, locale)} hint={t("awaiting")} />
           <Kpi
-            label="thresholds"
-            value={`${TRUST_MUTED.toFixed(2)} / ${TRUST_TRUSTED.toFixed(2)}`}
-            hint="mute / trust"
+            label={t("thresholds")}
+            value={`${formatFixed(TRUST_MUTED, locale)} / ${formatFixed(TRUST_TRUSTED, locale)}`}
+            hint={t("muteTrust")}
           />
         </div>
       </section>
@@ -126,11 +131,11 @@ export default async function FeedPage() {
       {/* ── Rows ───────────────────────────────────────────────────────── */}
       {loadError ? (
         <div className="rounded-xl border border-false/30 bg-false/5 p-5">
-          <p className="label mb-1.5 text-false">API unreachable</p>
+          <p className="label mb-1.5 text-false">{t("apiDown")}</p>
           <p className="text-[13px] text-ink-2">{loadError}</p>
           <p className="mt-2 text-[12px] text-ink-3">
-            Set <span className="mono">NEXT_PUBLIC_API_URL</span> to the Coolify API
-            origin, or check that the API container is healthy.
+            {t("apiHintBefore")} <span className="mono">NEXT_PUBLIC_API_URL</span>{" "}
+            {t("apiHintAfter")}
           </p>
         </div>
       ) : visible.length === 0 ? (
@@ -169,7 +174,7 @@ export default async function FeedPage() {
                       />
                       {adjudicated < MIN_SAMPLE && (
                         <span className="text-[11px] text-ink-3">
-                          {adjudicated}/{MIN_SAMPLE} judged
+                          {t("judged", { done: adjudicated, need: MIN_SAMPLE })}
                         </span>
                       )}
 
@@ -180,7 +185,7 @@ export default async function FeedPage() {
                           <VerdictBadge outcome="void" />
                         ) : (
                           <HaloBadge variant="outline" className="text-[11px]">
-                            pending
+                            {t("pending")}
                           </HaloBadge>
                         )}
                         {claim.sourceUrl?.startsWith("https://") && (
@@ -188,7 +193,7 @@ export default async function FeedPage() {
                             href={claim.sourceUrl}
                             target="_blank"
                             rel="noreferrer"
-                            aria-label="Open the original post"
+                            aria-label={t("openPost")}
                             className="text-ink-3 transition-colors hover:text-ink"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
@@ -206,19 +211,23 @@ export default async function FeedPage() {
                     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-ink-3">
                       <span className="mono">{claim.claimType}</span>
                       <span aria-hidden="true" className="text-line-strong">/</span>
-                      <span className="mono tnum">due {claim.deadline.slice(0, 10)}</span>
+                      <span className="mono tnum">
+                        {t("due", { date: formatDateOnly(claim.deadline, locale) })}
+                      </span>
                       {claim.synthetic && (
                         <>
                           <span aria-hidden="true" className="text-line-strong">/</span>
                           <span className="rounded border border-line-strong px-1.5 py-px">
-                            synthetic
+                            {t("synthetic")}
                           </span>
                         </>
                       )}
                       {claim.walrusBlobId && (
                         <>
                           <span aria-hidden="true" className="text-line-strong">/</span>
-                          <span className="mono">blob {claim.walrusBlobId.slice(0, 10)}…</span>
+                          <span className="mono">
+                            {t("blob", { id: claim.walrusBlobId.slice(0, 10) })}
+                          </span>
                         </>
                       )}
                     </div>
@@ -226,7 +235,7 @@ export default async function FeedPage() {
 
                   {/* Trust spine */}
                   <div className="hidden w-32 shrink-0 flex-col justify-center gap-2 border-l border-line px-4 sm:flex">
-                    <span className="label">trust</span>
+                    <span className="label">{t("trust")}</span>
                     <TrustMeter score={source.score} band={band} size="sm" />
                   </div>
                 </div>
@@ -237,33 +246,37 @@ export default async function FeedPage() {
       )}
 
       {hidden > 0 && (
-        <p className="mt-4 text-[12px] text-ink-3">
-          {hidden} claim{hidden === 1 ? "" : "s"} from muted sources{" "}
-          {hidden === 1 ? "is" : "are"} not shown.
-        </p>
+        <p className="mt-4 text-[12px] text-ink-3">{t("hidden", { count: hidden })}</p>
       )}
 
       {/* ── Legend ─────────────────────────────────────────────────────── */}
       <section className="mt-12 overflow-hidden rounded-2xl border border-line bg-surface-1">
         <div className="flex items-center gap-2 border-b border-line px-5 py-3">
           <LedgerIllustration className="h-5 w-6 text-ink-3" muted />
-          <h2 className="text-[13px] font-medium">How to read a row</h2>
+          <h2 className="text-[13px] font-medium">{t("legendTitle")}</h2>
         </div>
         <div className="grid gap-px bg-line sm:grid-cols-3">
           <LegendItem
             visual={<TrustMeter score={0.62} band="trusted" size="sm" />}
-            title="Trust meter"
-            body={`Fill is the score. The two ticks are the mute (${TRUST_MUTED.toFixed(2)}) and trust (${TRUST_TRUSTED.toFixed(2)}) thresholds.`}
+            title={t("meterTitle")}
+            body={t("meterBody", {
+              mute: formatFixed(TRUST_MUTED, locale),
+              trust: formatFixed(TRUST_TRUSTED, locale),
+            })}
           />
           <LegendItem
             visual={<VerdictBadge outcome="void" />}
-            title="Verdict"
-            body="True and false are judgements. Void means we could not check — it never moves a score."
+            title={t("verdictTitle")}
+            body={t("verdictBody")}
           />
           <LegendItem
-            visual={<span className="mono text-[11px] text-ink-2">0.48 · 8/10</span>}
-            title="Score and record"
-            body="Wilson lower bound, then hits over adjudicated claims. Sample size is always visible."
+            visual={
+              <span className="mono text-[11px] text-ink-2">
+                {formatFixed(0.48, locale)} · {formatCount(8, locale)}/{formatCount(10, locale)}
+              </span>
+            }
+            title={t("scoreTitle")}
+            body={t("scoreBody")}
           />
         </div>
       </section>
@@ -301,7 +314,13 @@ function LegendItem({
   );
 }
 
-function EmptyState() {
+async function uiLocale(): Promise<Locale> {
+  const value = await getLocale();
+  return isLocale(value) ? value : "en";
+}
+
+async function EmptyState() {
+  const t = await getTranslations("feed");
   return (
     <div className="relative overflow-hidden rounded-2xl border border-line bg-surface-1 px-6 py-12 text-center">
       <div
@@ -313,15 +332,11 @@ function EmptyState() {
       />
       <div className="relative mx-auto flex max-w-md flex-col items-center">
         <SealIllustration className="mb-4 h-[92px] w-[120px]" />
-        <p className="text-[16px] font-medium">No claims in the ledger yet.</p>
-        <p className="mt-2 text-[13px] leading-relaxed text-ink-2">
-          Paste a post that makes a checkable claim about onchain state. Walkback
-          freezes a balance snapshot, waits for the deadline, then checks it
-          against Sui mainnet.
-        </p>
+        <p className="text-[16px] font-medium">{t("emptyTitle")}</p>
+        <p className="mt-2 text-[13px] leading-relaxed text-ink-2">{t("emptyBody")}</p>
         <Button asChild size="sm" className="mt-5 gap-1.5">
           <a href="/ingest">
-            Ingest a post
+            {t("ingest")}
             <ArrowRight className="h-3.5 w-3.5" />
           </a>
         </Button>

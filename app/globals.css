@@ -145,6 +145,12 @@ body {
   font-weight: 500;
 }
 
+/* Uppercase tracking is for Latin labels. Chinese stays untracked. */
+html[lang="zh-Hant"] .label {
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
 /* Hairline rule used to separate ledger rows without drawing boxes. */
 .rule {
   border-top: 1px solid var(--color-line);

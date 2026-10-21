@@ -5,14 +5,14 @@
  * surface), so a verdict is triply encoded: a distinct glyph shape, a word,
  * and a colour. Removing any one of the three still leaves it readable.
  */
+import { getTranslations } from "next-intl/server";
 import type { Outcome } from "@/lib/types";
 
 const SPEC: Record<
   Outcome,
-  { word: string; glyph: React.ReactNode; text: string; ring: string; bg: string }
+  { glyph: React.ReactNode; text: string; ring: string; bg: string }
 > = {
   true: {
-    word: "true",
     text: "text-true",
     ring: "border-true/35",
     bg: "bg-true/8",
@@ -30,7 +30,6 @@ const SPEC: Record<
     ),
   },
   false: {
-    word: "false",
     text: "text-false",
     ring: "border-false/35",
     bg: "bg-false/8",
@@ -47,7 +46,6 @@ const SPEC: Record<
     ),
   },
   void: {
-    word: "void",
     text: "text-ink-3",
     ring: "border-line-strong",
     bg: "bg-surface-2",
@@ -60,21 +58,22 @@ const SPEC: Record<
   },
 };
 
-export default function VerdictBadge({
+export default async function VerdictBadge({
   outcome,
   size = "sm",
 }: {
   outcome: Outcome;
   size?: "sm" | "lg";
 }) {
+  const t = await getTranslations("verdict");
   const s = SPEC[outcome];
   const pad = size === "lg" ? "px-2.5 py-1 text-[13px]" : "px-2 py-0.5 text-[11px]";
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded border ${s.ring} ${s.bg} ${s.text} ${pad} font-medium capitalize`}
+      className={`inline-flex items-center gap-1.5 rounded border ${s.ring} ${s.bg} ${s.text} ${pad} font-medium`}
     >
       {s.glyph}
-      {s.word}
+      {t(outcome)}
     </span>
   );
 }

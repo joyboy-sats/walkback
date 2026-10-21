@@ -10,20 +10,16 @@
  * reads as a single magnitude scale. The band is also stated in words next to
  * it — colour never carries the meaning alone.
  */
+import { getLocale, getTranslations } from "next-intl/server";
 import { TRUST_MUTED, TRUST_TRUSTED, type TrustBand } from "@/lib/score";
+import { formatCount, formatFixed } from "@/lib/locale-format";
+import { isLocale, type Locale } from "@/lib/locale";
 
 const FILL: Record<TrustBand, string> = {
   unknown: "bg-band-low",
   muted: "bg-band-low",
   normal: "bg-band-mid",
   trusted: "bg-band-high",
-};
-
-const BAND_WORD: Record<TrustBand, string> = {
-  unknown: "unrated",
-  muted: "muted",
-  normal: "normal",
-  trusted: "trusted",
 };
 
 const BAND_TEXT: Record<TrustBand, string> = {
@@ -33,7 +29,12 @@ const BAND_TEXT: Record<TrustBand, string> = {
   trusted: "text-accent",
 };
 
-export function TrustMeter({
+async function locale(): Promise<Locale> {
+  const value = await getLocale();
+  return isLocale(value) ? value : "en";
+}
+
+export async function TrustMeter({
   score,
   band,
   size = "md",
@@ -44,10 +45,15 @@ export function TrustMeter({
   size?: "sm" | "md";
   showMarks?: boolean;
 }) {
+  const t = await getTranslations("band");
+  const lang = await locale();
   const pct = Math.max(0, Math.min(1, score)) * 100;
   const h = size === "sm" ? 4 : 6;
   return (
-    <div className="meter-track w-full" title={`trust ${score.toFixed(2)} — ${BAND_WORD[band]}`}>
+    <div
+      className="meter-track w-full"
+      title={t("meterTitle", { score: formatFixed(score, lang), band: t(band) })}
+    >
       <div className="meter" style={{ height: h, borderRadius: h / 2 }}>
         <div
           className={`fill ${FILL[band]}`}
@@ -73,7 +79,7 @@ export function TrustMeter({
 }
 
 /** Score + band word + sample size, the atom used in rows and headers. */
-export function TrustReadout({
+export async function TrustReadout({
   score,
   band,
   hits,
@@ -86,20 +92,22 @@ export function TrustReadout({
   misses: number;
   compact?: boolean;
 }) {
+  const t = await getTranslations("band");
+  const lang = await locale();
   const adjudicated = hits + misses;
   return (
     <span className="inline-flex items-baseline gap-2">
       <span className="tnum text-[15px] font-medium tracking-[-0.01em]">
-        {score.toFixed(2)}
+        {formatFixed(score, lang)}
       </span>
-      <span className={`text-[11px] ${BAND_TEXT[band]}`}>{BAND_WORD[band]}</span>
+      <span className={`text-[11px] ${BAND_TEXT[band]}`}>{t(band)}</span>
       {!compact && (
         <span className="text-[11px] text-ink-3 tnum">
-          {hits}/{adjudicated || 0}
+          {formatCount(hits, lang)}/{formatCount(adjudicated || 0, lang)}
         </span>
       )}
     </span>
   );
 }
 
-export { BAND_WORD, BAND_TEXT };
+export { BAND_TEXT };

@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
 import { format } from "date-fns"
-import { enUS } from "date-fns/locale"
+import { enUS, zhTW, type Locale as DateFnsLocale } from "date-fns/locale"
 import { CalendarIcon, X } from "lucide-react"
+import { useLocale, useTranslations } from "next-intl"
 import { cn } from "cn"
+import { isLocale, type Locale } from "@/lib/locale"
 import {
   clampTimePart,
   formatLocalDateTime,
@@ -20,11 +22,11 @@ import {
 } from "@/components/ui/popover"
 
 /**
- * Date and time, displayed in English, stored as `YYYY-MM-DDTHH:mm`.
+ * Date and time, stored as `YYYY-MM-DDTHH:mm`.
  *
- * The native datetime-local control follows the browser locale (a Chinese
- * browser shows 年/月/日). This picker does not. Clearing it sets the value
- * back to "" — the form's existing submit check still requires a time.
+ * The display follows the Walkback locale (en-US or zh-TW), not the browser
+ * language. Clearing it sets the value back to "" — the form's existing
+ * submit check still requires a time.
  */
 export function DateTimePicker({
   id,
@@ -39,6 +41,13 @@ export function DateTimePicker({
   disabled?: boolean
   className?: string
 }) {
+  const current = useLocale()
+  const locale: Locale = isLocale(current) ? current : "en"
+  const t = useTranslations("picker")
+  const dateLocale: DateFnsLocale = locale === "zh-Hant" ? zhTW : enUS
+  const weekStartsOn = (dateLocale.options?.weekStartsOn ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6
+  const datePattern = locale === "zh-Hant" ? "yyyy年M月d日 HH:mm" : "MMM d, yyyy, h:mm a"
+  const timePattern = locale === "zh-Hant" ? "HH:mm" : "h:mm a"
   const [open, setOpen] = useState(false)
   const selected = parseLocalDateTime(value)
   const [hourText, setHourText] = useState(selected ? padTime(selected.getHours()) : "00")
@@ -90,13 +99,13 @@ export function DateTimePicker({
   }
 
   const label = selected
-    ? format(selected, "MMM d, yyyy, h:mm a", { locale: enUS })
-    : "Select date and time"
+    ? format(selected, datePattern, { locale: dateLocale })
+    : t("select")
 
   const timeReadout = format(
     new Date(2000, 0, 1, clampTimePart(hourText, 23), clampTimePart(minuteText, 59)),
-    "h:mm a",
-    { locale: enUS }
+    timePattern,
+    { locale: dateLocale }
   )
 
   function onTimeKeyDown(
@@ -142,9 +151,12 @@ export function DateTimePicker({
             <CalendarIcon className="pointer-events-none absolute right-3 size-3.5 text-ink-2" />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-[280px]" lang="en-US">
+        <PopoverContent className="w-[280px]" lang={locale === "zh-Hant" ? "zh-Hant" : "en-US"}>
           <Calendar
             mode="single"
+            locale={dateLocale}
+            weekStartsOn={weekStartsOn}
+            lang={locale === "zh-Hant" ? "zh-Hant" : "en-US"}
             selected={selected ?? undefined}
             defaultMonth={selected ?? new Date()}
             onSelect={(next) => {
@@ -153,9 +165,9 @@ export function DateTimePicker({
             }}
           />
           <div className="flex items-center gap-2 border-t border-line px-3 py-3">
-            <span className="label">Time</span>
+            <span className="label">{t("time")}</span>
             <input
-              aria-label="Hour"
+              aria-label={t("hour")}
               inputMode="numeric"
               autoComplete="off"
               disabled={disabled}
@@ -182,7 +194,7 @@ export function DateTimePicker({
               :
             </span>
             <input
-              aria-label="Minute"
+              aria-label={t("minute")}
               inputMode="numeric"
               autoComplete="off"
               disabled={disabled}
@@ -208,14 +220,14 @@ export function DateTimePicker({
             <span className="ml-auto text-[12px] text-ink-2 tnum">{timeReadout}</span>
           </div>
           <div className="flex items-center justify-between border-t border-line px-3 py-2">
-            <span className="text-[11px] text-ink-3">24-hour · English</span>
+            <span className="text-[11px] text-ink-3">{t("hint")}</span>
             <button
               type="button"
               onClick={clear}
               disabled={disabled || !value}
               className="text-[12px] text-ink-2 hover:text-ink disabled:opacity-40"
             >
-              Clear
+              {t("clear")}
             </button>
           </div>
         </PopoverContent>
@@ -223,7 +235,7 @@ export function DateTimePicker({
       {value && !disabled ? (
         <button
           type="button"
-          aria-label="Clear date and time"
+          aria-label={t("clearField")}
           onClick={clear}
           className="absolute top-1/2 right-8 inline-flex size-5 -translate-y-1/2 items-center justify-center rounded text-ink-3 hover:text-ink"
         >

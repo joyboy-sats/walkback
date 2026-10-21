@@ -14,8 +14,9 @@ import { cn } from "cn"
  * Month grid in English, on Walkback's dark surfaces.
  *
  * react-day-picker's default stylesheet is a light theme, so this component
- * does not import it. Layout and colour live in these class names. Locale is
- * pinned to en-US so a Chinese-locale browser still shows "October" and "Mo".
+ * does not import it. Layout and colour live in these class names. The
+ * default locale is en-US; the date picker passes zh-TW when the UI is
+ * Traditional Chinese.
  */
 function Calendar({
   className,

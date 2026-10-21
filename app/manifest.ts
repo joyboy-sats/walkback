@@ -1,10 +1,12 @@
 import type { MetadataRoute } from "next";
+import { getTranslations } from "next-intl/server";
 
-export default function manifest(): MetadataRoute.Manifest {
+export default async function manifest(): Promise<MetadataRoute.Manifest> {
+  const t = await getTranslations("meta");
   return {
     name: "Walkback",
     short_name: "Walkback",
-    description: "Walkback — we keep the receipts",
+    description: t("ogTitle"),
     start_url: "/",
     display: "standalone",
     background_color: "#08080a",
