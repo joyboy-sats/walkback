@@ -15,13 +15,18 @@ remains is mostly surface area, seed data, and the submission artefacts.
 - Write latency measured: ~24s single, 6.1s/item bulk (`npm run timing`).
 - `lib/`: env, types, score (+15 tests), ratelimit, tatum, memwal, memory-text,
   adjudicate, extract, ingest, resolve, memory-log, db.
-- `app/`: Feed, Source detail, Memory Explorer, three API routes.
+- `app/`: Feed, Source detail, Memory Explorer, Ingest. The UI talks to the
+  Coolify API (`server/index.ts`). The worker (`worker/index.ts`) adjudicates
+  and writes Walrus. Vercel does not run those routes.
 - `npm run typecheck`, `npm run test`, `npm run build` all pass.
 
 **Blocks that need a human, not an agent**
 
-- `TATUM_API_KEY` has never been exercised. `price_threshold` support for
-  `symbol=SUI` is unverified; the endpoint needs auth.
+- `TATUM_API_KEY` has never been exercised. `price_threshold` is priced by
+  Tatum `getRate` (`/v4/data/rate/symbol`), not CoinGecko. Support for
+  `symbol=SUI` (the six seeded price claims are all SUI/USD) is unverified;
+  the endpoint needs auth. An unsupported pair resolves `void` and does not
+  move the score.
 - `AI_GATEWAY_API_KEY` is unset, so extraction has never run.
 - `DATABASE_URL` is unset, so the projection has never been created.
 - `MEMWAL_AGENT_ID` is assumed to be the delegate public key. Unconfirmed.
@@ -30,16 +35,13 @@ remains is mostly surface area, seed data, and the submission artefacts.
 
 ## Task 1 — Database bootstrap
 
-Create a Neon database, set `DATABASE_URL`, then:
-
-```bash
-npm run db:generate
-npm run db:push
-```
+Done. Postgres is the Coolify internal database, not Neon. Schema changes live
+in `drizzle/` and apply on API and worker boot, and with `npm run db:migrate`.
+`npm run seed` does not apply them. `claims.source_url` is `drizzle/0002_source_url.sql`.
 
 **Acceptance:** `\dt` in psql shows `sources`, `claims`, `resolutions`,
-`score_versions`, `memory_log` and the three enums. Commit the generated
-migration folder.
+`score_versions`, `memory_log`, `seed_posts`, and the enums. `claims` has
+`source_url`.
 
 ---
 
@@ -94,30 +96,39 @@ assume order. Dedupe on `blob_id`.
 
 ## Task 4 — Seed data
 
-Write `scripts/seed.ts`. Without this there is no "learned over time" story and
-the demo has nothing to show.
+`scripts/seed.ts` reads `data/claims.json`. The committed file is real X posts
+collected 2026-10-20 (SGT): 18 posts, 18 claims, 7 handles. None are synthetic.
 
-Target: 10–15 sources, 40–60 claims, a realistic mix of correct and incorrect.
+- 12 `tx_replay` claims from `@_OnChainWatch`. Deadlines are on or before
+  2026-10-20, so a seed run resolves them. Each post sets `"snapshot": null`
+  so ingest does not read a live balance.
+- 6 `price_threshold` claims, every one `SUI`/`USD`. Deadlines are
+  2026-10-30 and 2026-11-08, so the seed leaves them pending. Pricing is
+  Tatum `getRate`. SUI/USD support is unverified.
+- `@mysqlsui` and both `balance_threshold` claims are omitted.
+- Each post keeps `source_url`. The feed links to it.
 
-Two sources of data, both legitimate, both must be labelled as such in the blog:
+Writes go one at a time through `rememberAndWait` with a stable idempotency
+key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
+exceed the 30 points/min delegate limit; `memwalWriteLimiter` handles it.
 
-- **Synthetic snapshots (majority).** Construct claims whose snapshots encode a
-  known starting balance, and whose current balance is real and readable
-  through Tatum. The time is injected; the numbers are real.
-- **True replay (minority).** Pick real addresses and adjudicate a historical
-  claim through `tx_replay`.
+On the machine that holds `.env.local` (delegate key and `TATUM_API_KEY`; not
+Vercel):
 
-Rules:
+```bash
+npm run db:migrate
+npm run seed
+npm run list:memories
+```
 
-- Use `writeMemoriesBulk`, 20 per call. A single write is 24s; do not loop.
-- Pass stable `idempotencyKey`s so re-running does not duplicate.
-- Print a summary at the end: memory count per namespace, blob ids, and the
-  final score per source.
-- Do not exceed the 30 points/min delegate limit; `memwalWriteLimiter` handles
-  it, but do not bypass it.
+On an empty delegate that accepts every write, the run adds 7 source memories,
+18 claim memories, 12 resolution memories, and one score memory per replay
+verdict that is `true` or `false`. A `void` writes a resolution and no score.
+That is 37 memories if every replay is void, and 49 if every replay is true
+or false. `list:memories` prints the account total.
 
 **Acceptance:** re-running `npm run seed` twice does not double the ledger, and
-the Feed visibly reorders between sources with different records.
+the Feed links each claim to its original post.
 
 ---
 

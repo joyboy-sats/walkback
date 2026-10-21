@@ -4,11 +4,13 @@
  *   npm run seed
  *   npm run seed -- data/claims.json
  *
- * The file is posts the owner collected. Real posts are the dataset; an entry
- * with `synthetic: true` is a demo fallback and is labelled as such. This
- * script refuses to invent claims of its own. Needs DATABASE_URL, the Walrus
- * delegate key, and — for posts that omit `claims` or `snapshot` — the model
- * key and Tatum.
+ * The committed file is real posts. An entry with `synthetic: true` is a demo
+ * fallback and is labelled as such. This script refuses to invent claims of
+ * its own. Needs DATABASE_URL and the Walrus delegate key. Apply migrations
+ * first (`npm run db:migrate`): seed does not. The committed file sets
+ * `claims` on every post and `snapshot: null` on replays, so it does not call
+ * the model. It does call Tatum, because tx_replay claims whose deadlines
+ * have passed are resolved at the end of the run.
  */
 import "dotenv/config";
 import { config } from "dotenv";

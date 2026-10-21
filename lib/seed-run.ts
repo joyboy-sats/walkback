@@ -38,6 +38,7 @@ export async function runSeed(raw: unknown): Promise<string> {
       ...(claims ? { claims } : {}),
       ...("snapshot" in post ? { recordedSnapshot: post.snapshot ?? null } : {}),
       synthetic: isSynthetic(post),
+      ...(post.source_url ? { sourceUrl: post.source_url } : {}),
       externalId: post.id,
       deferMemories: true,
       includeSourceMemory: true,

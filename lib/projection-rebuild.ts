@@ -198,6 +198,7 @@ export interface RebuiltClaim {
   status: "pending" | "resolved" | "void";
   synthetic: boolean;
   externalId: string | null;
+  sourceUrl: string | null;
   walrusBlobId: string;
   createdAt: string;
 }
@@ -1324,6 +1325,7 @@ async function applyProjection(p: Projection): Promise<void> {
           confidence: c.confidence,
           synthetic: c.synthetic,
           externalId: c.externalId,
+          sourceUrl: c.sourceUrl,
           createdAt: new Date(c.createdAt),
           walrusBlobId: c.walrusBlobId,
         })),
@@ -1498,6 +1500,7 @@ function addClaim(
     status: "pending",
     synthetic: payload.synthetic === true,
     externalId: typeof payload.external_id === "string" ? payload.external_id : null,
+    sourceUrl: typeof payload.source_url === "string" ? payload.source_url : null,
     walrusBlobId: mem.blobId,
     createdAt: mem.createdAt ?? new Date(0).toISOString(),
   });

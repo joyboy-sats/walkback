@@ -25,6 +25,7 @@ export async function readFeed() {
       status: claim.status,
       deadline: claim.deadline.toISOString(),
       synthetic: claim.synthetic,
+      sourceUrl: claim.sourceUrl,
       walrusBlobId: claim.walrusBlobId,
     },
     source: {
@@ -77,6 +78,7 @@ export async function readSource(id: string) {
         status: claim.status,
         deadline: claim.deadline.toISOString(),
         synthetic: claim.synthetic,
+        sourceUrl: claim.sourceUrl,
         walrusBlobId: claim.walrusBlobId,
       },
       resolution: resolution

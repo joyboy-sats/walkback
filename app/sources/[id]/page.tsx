@@ -25,6 +25,7 @@ interface SourceDetail {
       claimType: string;
       deadline: string;
       synthetic: boolean;
+      sourceUrl: string | null;
       walrusBlobId: string | null;
     };
     resolution: {
@@ -147,6 +148,11 @@ export default async function SourcePage({
               </span>
               <span className="text-[var(--dim)]">{claim.claimType}</span>
               {claim.synthetic && <span className="text-[var(--void)]">synthetic</span>}
+              {claim.sourceUrl?.startsWith("https://") && (
+                <a href={claim.sourceUrl} className="hover:underline" target="_blank" rel="noreferrer">
+                  original post
+                </a>
+              )}
               <span className="ml-auto mono text-[var(--void)]">
                 {claim.deadline.slice(0, 10)}
               </span>
