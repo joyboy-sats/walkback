@@ -1,38 +1,37 @@
 import { cn } from "cn"
 
 /**
- * Walkback mark: a torn receipt with the check that means "we kept it".
+ * Owner mark: lips biting a receipt with a check.
  *
- * Drawn for 16–32px. The paper is currentColor so it follows the header ink;
- * the check is the accent, hardcoded as a token so it stays purple on the
- * dark theme. Strokes are heavy enough to survive a browser tab.
+ * Paths and colors are the master logo, unchanged. The viewBox is cropped
+ * to the artwork so a 28px header slot and a 16px tab icon stay filled.
+ * Mouth interior is #0a0a0b, the same near-black as the page, so the lips
+ * and the receipt are what read at small sizes.
  */
+const VIEW_BOX = "41.5 55 434 434"
+
 export function BrandMark({ className }: { className?: string }) {
   return (
-    <svg
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden="true"
-      className={cn("h-5 w-5", className)}
-    >
+    <svg viewBox={VIEW_BOX} aria-hidden="true" className={cn("h-7 w-7", className)}>
       <path
-        d="M7 5h13.5V10.5H26V22l-3.2 2.6-3.2-2.6-3.2 2.6-3.2-2.6-3.2 2.6L7 22V5z"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
+        fill="#8b5cf6"
+        d="M58.79 195.98 C91.46 179.24 110.24 166.18 132.29 149.84 C164.95 124.94 188.22 107.38 220.89 107.79 C250.28 106.97 271.11 120.04 300.1 138 C305.81 141.68 307.85 142.9 316.02 140.04 C333.17 134.33 345.82 132.7 360.93 138 C383.39 145.35 394.41 158.01 409.52 174.75 C424.63 191.08 435.65 198.43 453.21 204.56 C433.61 220.48 413.19 235.99 388.29 251.92 C360.52 270.29 332.76 289.07 303.77 303.36 C269.07 320.51 224.97 329.08 186.59 319.29 C155.56 313.57 127.8 298.87 102.48 272.33 C84.52 253.14 69.82 227.42 58.79 195.98Z"
       />
       <path
-        d="M20.5 5 26 10.5"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
+        fill="#0a0a0b"
+        d="M117.59 204.56 C142.49 198.84 165.36 190.67 192.31 184.14 C207.82 180.06 222.93 177.61 238.04 180.06 C258.45 182.51 276.41 189.45 298.87 194.76 C332.76 202.51 368.28 207.41 405.84 206.6 C373.18 223.74 334.39 238.44 287.03 244.57 C252.73 249.47 218.85 249.06 198.02 243.34 C168.63 235.99 140.04 222.11 117.59 204.56Z"
       />
       <path
-        d="M11 15.2 14.2 18.4 21.4 10.8"
-        stroke="var(--color-accent)"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        fill="#f5f5f7"
+        d="M201.29 181.69 C213.13 179.24 224.15 178.42 234.36 179.65 C258.04 182.1 282.13 191.49 316.02 197.21 L312.75 212.31 C312.34 215.58 310.71 216.8 306.22 216.8 C280.09 217.62 249.88 213.13 211.5 207.82 C204.15 206.6 202.11 201.7 201.7 194.76Z"
+      />
+      <path
+        fill="#f5f5f7"
+        d="M211.5 234.77 L370.32 213.54 C374.81 212.72 376.45 213.95 378.9 218.44 C401.35 261.72 437.28 342.97 460.15 396.04 L411.15 377.67 L385.43 409.93 L336.03 391.55 L289.89 437.69Z"
+      />
+      <path
+        fill="#16a34a"
+        d="M270.7 320.1 L293.15 296.42 L317.24 317.65 L367.06 248.65 L390.33 273.56 L322.55 366.65Z"
       />
     </svg>
   )

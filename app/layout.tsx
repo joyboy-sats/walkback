@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="sticky top-0 z-20 border-b border-line bg-surface-0/85 backdrop-blur-md">
           <div className="mx-auto flex h-14 max-w-5xl items-center gap-3 px-6">
             <a href="/" className="group flex items-center gap-2.5">
-              <BrandMark className="h-5 w-5 text-ink" />
+              <BrandMark className="h-7 w-7" />
               <span className="text-[15px] font-semibold tracking-[-0.01em]">Walkback</span>
             </a>
             <span className="hidden text-[13px] text-ink-3 sm:inline">we keep the receipts</span>
