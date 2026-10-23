@@ -1,14 +1,55 @@
 # Walkback
 
-**Sources make claims. Walkback checks them against Sui mainnet, keeps every
-claim and verdict in Walrus Memory, and demotes the sources that get it wrong —
-so you literally see less of them tomorrow.**
+On X, people call markets all day. Nobody ever checks whether they were right. This does.
+
+Walkback remembers which public market calls held up.
+It checks real X posts against Tatum historical OHLCV candles and Sui mainnet
+transactions, writes claims, verdicts, and score versions to Walrus Memory on
+mainnet, and uses that history to rank and filter sources. Sources remain
+unrated until three claims are adjudicated.
+
+Built for **Total Recall — Track 1: Markets & Sports Prediction**.
+
+[Demo](https://walkback.ch4.app) · Video (TODO) · Blog (TODO) · [Mainnet evidence](#mainnet-evidence)
 
 > Walkback (n.) — the act of retracting a claim you made earlier.
 > This app is what happens when nobody lets you forget you made it.
 
-Built for the **Walrus x Tatum "Total Recall" Memory Hackathon** (Track 2:
-Smart Agents for Real Life).
+## Tatum Data API and Tatum Sui RPC
+
+These are different Tatum products. A verdict names which one it used.
+
+**Tatum Data API** supplies historical prices. A `price_threshold` claim is
+checked against USD OHLCV candles (`GET /v4/data/rate/symbol/OHLCV`, and the
+batch route when many candles are needed). The spot rate
+(`/v4/data/rate/symbol`) is not a verdict. How a touch is read, including
+boundary candles and the deadline conventions, is in
+[Methodology](#methodology).
+
+**Tatum Sui RPC** (`https://sui-mainnet.gateway.tatum.io`) supplies chain
+reads. `tx_replay` uses `suix_queryTransactionBlocks` with
+`showBalanceChanges`. `balance_threshold` and `balance_change_since_ingest`
+use `suix_getBalance`, which is current state only. Sui has no historical
+balance query, so a change claim needs the snapshot taken at ingest.
+
+## Retrospective benchmark
+
+The historical set in `data/claims.json` is a retrospective benchmark. The
+posts are real X posts, collected after they were published, and checked
+against the record those calls already left. A score on this set says whether
+those recorded calls held up. It is not a live forward test of what the
+account calls next, and it does not cover the rest of the account.
+
+## Mainnet evidence
+
+TODO: dated verified counts.
+
+TODO: blob-id table.
+
+TODO: MemWal account object ID (`MEMWAL_ACCOUNT_ID`).
+
+These stay blank until a counted mainnet pass writes them in. Do not fill
+them from a local run or from memory.
 
 ## Disclaimer
 
@@ -32,8 +73,11 @@ The mute threshold is 0.40 and the trust threshold is 0.55. Once at least 3 clai
 
 ## Status
 
-The UI, the Coolify API, and the worker are in place. Live writes still need
-the owner's credentials on Coolify; nothing in this repo contains a key.
+The UI is deployed at <https://walkback.ch4.app>. The Coolify worker writes
+claims, verdicts, and score versions to Walrus Memory on mainnet. This
+repository is public and does not contain a key. Dated counts, the blob-id
+table, and the MemWal account object ID belong in
+[Mainnet evidence](#mainnet-evidence). They are not listed here.
 
 What works today:
 
@@ -127,7 +171,8 @@ From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
 ## Adding claims
 
 `npm run seed` reads `data/claims.json` and runs each post through the same
-ingest path as the app. The file in the repo is the real set: 30 posts, 33
+ingest path as the app. That file is the
+[retrospective benchmark](#retrospective-benchmark): the real set, 30 posts, 33
 claims, 10 handles. Eleven are `tx_replay` posts from `@_OnChainWatch`.
 Twenty-two are `price_threshold` claims, all `evaluation: touch` against
 `USD`. Six of those, all `SUI`, were collected on 2026-10-20 and stay pending
@@ -141,7 +186,6 @@ are marked synthetic. `@mysqlsui` and both `balance_threshold` claims were
 left out on purpose. Four historical claims the collector scored below 0.6
 are stored at the 0.6 floor; the targets and windows are the ones in the
 posts.
-
 Each post has `source_url`, the permalink of the original X post. The feed
 and the source page link there when the URL is `https`.
 
@@ -274,7 +318,11 @@ Worker command, also `npm run worker`:
 `server-only`. Both processes apply `drizzle/` on boot. `npm run db:migrate`
 is the same migrator for a one-off.
 
-Reads (`GET /feed`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
+Reads (`GET /feed`, `/ledger`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
+`/ledger` is the homepage summary: every source (band, hits, misses, claim
+types) and the projection totals. The memory total is the projection
+inventory. It is labeled verified only when the newest finished rebuild job
+reported a complete Walrus list walk.
 Writes (`POST /ingest`, `/rebuild`, `/resolve`, `/restore`) require the header
 `x-admin-token: <ADMIN_TOKEN>`. CORS reflects `CORS_ORIGIN` only.
 

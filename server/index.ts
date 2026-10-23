@@ -7,6 +7,7 @@
  *
  *   GET  /health
  *   GET  /feed
+ *   GET  /ledger
  *   GET  /sources/:id
  *   GET  /memory
  *   GET  /jobs/:id
@@ -21,7 +22,7 @@ import { boot } from "../backend/boot";
 import { ingestBody } from "../lib/ingest-body";
 import { enqueueJob, readJob } from "../lib/job-queue";
 import { corsHeaders, preflightStatus, tokenMatches } from "../lib/http-guard";
-import { claimsForSourceUrls, readFeed, readMemory, readSource } from "../lib/reads";
+import { claimsForSourceUrls, readFeed, readLedger, readMemory, readSource } from "../lib/reads";
 import { NS } from "../lib/types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -133,6 +134,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
 
     if (req.method === "GET" && path === "/feed") {
       send(res, 200, await readFeed(), cors);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/ledger") {
+      send(res, 200, await readLedger(), cors);
       return;
     }
 
