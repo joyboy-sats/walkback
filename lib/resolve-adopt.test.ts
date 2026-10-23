@@ -44,7 +44,9 @@ const memwalMock = vi.hoisted(() => ({
 }));
 vi.mock("./memwal", () => memwalMock);
 
-const persistedMock = vi.hoisted(() => ({ findPersistedKeys: vi.fn(async () => new Set<string>()) }));
+const persistedMock = vi.hoisted(() => ({
+  findPersistedKeys: vi.fn(async (_writes?: readonly { idempotencyKey: string }[]) => new Set<string>()),
+}));
 vi.mock("./persisted-keys", () => persistedMock);
 
 const logMock = vi.hoisted(() => ({ logMemories: vi.fn(async () => {}) }));
@@ -250,9 +252,27 @@ describe("resolveClaim adoption", () => {
       ),
       { status: 409 },
     );
-    memwalMock.writeMemoriesDurable.mockResolvedValue({ error: conflict.message, cause: conflict });
-    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/does not match this verdict/);
-    expect(inserts).toHaveLength(0);
+    memwalMock.writeMemoriesDurable.mockImplementation(
+      async (
+        items: Array<{ idempotencyKey: string }>,
+        onPersisted: (item: { idempotencyKey: string }, result: { blobId: string; id: string }) => Promise<void>,
+      ) => {
+        const item = items[0]!;
+        if (item.idempotencyKey.startsWith("resolution:")) return { error: conflict.message, cause: conflict };
+        await onPersisted(item, { blobId: "blob-score", id: "job-score" });
+        return {};
+      },
+    );
+    const report = await resolveClaim(CLAIM_ID);
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(report.skipped).toBe("projected stored resolution; adjudicated verdict differed");
+    expect(inserts.some((row) => row.values.outcome === "true")).toBe(false);
+    expect(inserts.some((row) => row.values.outcome === "false" && row.values.reason === "stored reason")).toBe(true);
+    const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
+      (call[0] as Array<{ idempotencyKey: string }>).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:")),
+    );
+    expect(resolutionKeys).toEqual([`resolution:${CLAIM_ID}`]);
   });
 
   const recorded = {
@@ -314,7 +334,7 @@ describe("resolveClaim adoption", () => {
     );
     const report = await resolveClaim(CLAIM_ID, new Date(), { reconcile: true });
     expect(adjudicateMock).not.toHaveBeenCalled();
-    expect(report.skipped).toBe("adopted stored resolution");
+    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
     expect(report.outcome).toBe("false");
     expect(report.reason).toBe("stored reason");
     const keys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
@@ -324,7 +344,7 @@ describe("resolveClaim adoption", () => {
     expect(updates.some((values) => values.walrusBlobId === "blob-old" && values.reason === "stored reason")).toBe(true);
   });
 
-  it("on a 409 while repairing, refuses a stored memory that does not match the recorded verdict", async () => {
+  it("on a 409 while repairing, projects the stored memory and does not write a second resolution", async () => {
     state.resolutions = [{ ...recorded }];
     let resolutionReads = 0;
     memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
@@ -351,15 +371,59 @@ describe("resolveClaim adoption", () => {
         return {};
       },
     );
-    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/does not match this verdict/);
+    const report = await resolveClaim(CLAIM_ID);
     expect(adjudicateMock).not.toHaveBeenCalled();
-    expect(inserts.filter((row) => row.values.claimId === CLAIM_ID)).toHaveLength(0);
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
+    expect(updates.some((values) => values.reason === "stored reason" && values.walrusBlobId === "blob-old")).toBe(true);
     const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
       (call[0] as Array<{ idempotencyKey: string }>)
         .map((write) => write.idempotencyKey)
         .filter((key) => key.startsWith("resolution:")),
     );
     expect(resolutionKeys).toEqual([`resolution:${CLAIM_ID}`]);
+  });
+
+  it("does not report a linked resolution as resolved when recall cannot read it", async () => {
+    state.resolutions = [{ ...recorded, walrusBlobId: "blob-logged" }];
+    memwalMock.recallMemory.mockResolvedValue([]);
+    await expect(resolveClaim(CLAIM_ID, new Date(), { reconcile: true })).rejects.toThrow(/was not treated as the Walrus memory/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it("projects a logged resolution instead of committing the verdict it skipped writing", async () => {
+    let resolutionReads = 0;
+    memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
+      if (args.namespace !== "walkback.resolution") return [];
+      resolutionReads += 1;
+      return resolutionReads === 1 ? [] : [hit("false")];
+    });
+    persistedMock.findPersistedKeys.mockImplementation(async (writes) => {
+      const keys = (writes ?? []).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:"));
+      return new Set(keys);
+    });
+    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    memwalMock.writeMemoriesDurable.mockImplementation(
+      async (
+        items: Array<{ idempotencyKey: string }>,
+        onPersisted: (item: { idempotencyKey: string }, result: { blobId: string; id: string }) => Promise<void>,
+      ) => {
+        const item = items[0]!;
+        await onPersisted(item, { blobId: "blob-score", id: "job-score" });
+        return {};
+      },
+    );
+    const report = await resolveClaim(CLAIM_ID);
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(report.skipped).toBe("projected stored resolution; adjudicated verdict differed");
+    expect(inserts.some((row) => row.values.outcome === "true")).toBe(false);
+    const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
+      (call[0] as Array<{ idempotencyKey: string }>).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:")),
+    );
+    expect(resolutionKeys).toEqual([]);
   });
 
   it("parks a repair 409 that recall cannot read", async () => {

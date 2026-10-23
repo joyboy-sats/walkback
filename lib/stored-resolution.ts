@@ -214,9 +214,9 @@ export function comparableEvidence(evidence: unknown): string {
 }
 
 /**
- * A 409 is "already written" only when the stored memory is this verdict.
- * Same claim, outcome, reason, and candle evidence. A different verdict is a
- * conflict, not a success.
+ * Same claim, outcome, reason, and candle evidence. Clock and score fields
+ * are ignored. A mismatch means the stored memory is a different verdict,
+ * not a second copy of this one.
  */
 export function resolutionContentMatches(
   stored: { claimId: string; outcome: string; reason: string; evidence: Record<string, unknown> },
