@@ -18,7 +18,9 @@ import { configureDbPool, getDb, schema, closeDb } from "./db";
 import { ingest, markSeedPostApplied, persistIngestWrites } from "./ingest";
 import { destroyMemwal } from "./memwal";
 import { resolveDueClaims } from "./resolve";
+import { ohlcvCreditUsage, resetOhlcvCreditUsage } from "./price-candle";
 import {
+  estimateSeedOhlcv,
   formatSeedSummary,
   isSynthetic,
   materializeClaims,
@@ -54,6 +56,7 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
   });
 
   const file = parseClaimsFile(raw);
+  resetOhlcvCreditUsage();
   let postsSeeded = 0;
   let postsSkipped = 0;
   const failures: Array<{ step: string; error: string }> = [];
@@ -131,6 +134,15 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
   }
 
   const now = options.now ?? new Date();
+  const ohlcvEstimate = estimateSeedOhlcv(file.posts, now);
+  log(
+    `[seed] tatum OHLCV estimate: ${ohlcvEstimate.claims} past-deadline price claim(s), ` +
+      `${ohlcvEstimate.batchCalls} batch calls + ${ohlcvEstimate.singleCalls} single calls = ` +
+      `${ohlcvEstimate.credits} credits if each is still unresolved. ` +
+      `Boundary refinement adds at most ${ohlcvEstimate.refinementCapCredits} credits, ` +
+      `and only when a partial candle could decide the touch. Budget remaining about 99000. ` +
+      `Already-resolved claims are not checked again.`,
+  );
   const resolveLimit = options.resolveLimit ?? 200;
   let resolveErrors: Array<{ claimId: string; error: string }> = [];
 
@@ -197,7 +209,11 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
     };
   }
 
-  const summary = formatSeedSummary(summaryInput);
+  const observed = ohlcvCreditUsage();
+  log(
+    `[seed] tatum OHLCV observed this run: ${observed.singles} single, ${observed.batches} batch, ${observed.credits} credits`,
+  );
+  const summary = formatSeedSummary({ ...summaryInput, ohlcvEstimate, ohlcvObserved: observed });
   const ok =
     summaryInput.failures?.length === 0 &&
     summaryInput.notAttempted?.length === 0 &&

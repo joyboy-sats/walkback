@@ -12,7 +12,14 @@
  */
 import { z } from "zod";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
-import { priceParamsFromRaw } from "./price-candle";
+import {
+  BOUNDARY_REFINEMENT_CREDIT_CAP,
+  OHLCV_BATCH_CREDITS,
+  OHLCV_SINGLE_CREDITS,
+  denseBatchCalls,
+  priceParamsFromRaw,
+  touchIntervalFor,
+} from "./price-candle";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
 
 /** Matches `writeMemoriesBulk`'s server cap. A seed batch must not exceed it. */
@@ -81,7 +88,7 @@ export const seedPostSchema = z.object({
    * Use this for `tx_replay`, where the window has to be exact. Omit it and
    * the seed run extracts claims from `text`.
    */
-  claims: z.array(claimSchema).max(3).optional(),
+  claims: z.array(claimSchema).max(4).optional(),
 });
 
 export const seedFileSchema = z.object({
@@ -321,6 +328,59 @@ export interface SeedSummaryInput {
   failures?: Array<{ step: string; error: string }>;
   /** Posts left for a rerun because an earlier step timed out. */
   notAttempted?: string[];
+  /** What checking this file's past-deadline price claims costs, if they are still pending. */
+  ohlcvEstimate?: OhlcvCreditEstimate;
+  /** Live OHLCV calls made during this process. Replay mode stays at zero. */
+  ohlcvObserved?: { singles: number; batches: number; credits: number };
+}
+
+export interface OhlcvCreditEstimate {
+  claims: number;
+  batchCalls: number;
+  singleCalls: number;
+  credits: number;
+  /** Extra batch credits if every touch claim has to refine both boundary hours. */
+  refinementCapCredits: number;
+}
+
+/**
+ * Credits to check every past-deadline price claim in the file.
+ *
+ * A touch is hourly batch calls (daily when the window exceeds the hourly
+ * budget), including the one-interval lead. `at_deadline` is one single
+ * candle. Boundary minutes are not included; `refinementCapCredits` is the
+ * ceiling if every touch claim has to settle both edges.
+ */
+export function estimateSeedOhlcv(posts: readonly SeedPost[], now: Date): OhlcvCreditEstimate {
+  let claims = 0;
+  let batchCalls = 0;
+  let singleCalls = 0;
+  let touchClaims = 0;
+  for (const post of posts) {
+    for (const claim of post.claims ?? []) {
+      if (claim.claim_type !== "price_threshold") continue;
+      if (Date.parse(claim.deadline) > now.getTime()) continue;
+      claims += 1;
+      const evaluation = claim.params.evaluation === undefined ? "at_deadline" : String(claim.params.evaluation);
+      if (evaluation === "touch") {
+        const since = String(claim.params.since ?? post.published_at);
+        const fromMs = Date.parse(since);
+        const toMs = Date.parse(claim.deadline);
+        const interval = touchIntervalFor(fromMs, toMs);
+        batchCalls += denseBatchCalls(fromMs, toMs, interval);
+        touchClaims += 1;
+      } else {
+        singleCalls += 1;
+      }
+    }
+  }
+  return {
+    claims,
+    batchCalls,
+    singleCalls,
+    credits: batchCalls * OHLCV_BATCH_CREDITS + singleCalls * OHLCV_SINGLE_CREDITS,
+    refinementCapCredits: touchClaims * BOUNDARY_REFINEMENT_CREDIT_CAP,
+  };
 }
 
 /** Human-readable summary. The script prints this and nothing else at the end. */
@@ -363,6 +423,22 @@ export function formatSeedSummary(s: SeedSummaryInput): string {
   if (s.notAttempted?.length) {
     lines.push("not attempted");
     for (const id of s.notAttempted) lines.push(`  ${id}`);
+  }
+  if (s.ohlcvEstimate) {
+    const estimate = s.ohlcvEstimate;
+    lines.push(
+      `tatum      estimate ${estimate.claims} past-deadline price claim(s): ` +
+        `${estimate.batchCalls} batch (${OHLCV_BATCH_CREDITS} credits) + ` +
+        `${estimate.singleCalls} single (${OHLCV_SINGLE_CREDITS} credits) = ${estimate.credits} credits ` +
+        `if each is still unresolved. Boundary refinement is extra and only when a partial candle could decide the touch, ` +
+        `at most ${estimate.refinementCapCredits} credits. Budget remaining about 99000.`,
+    );
+  }
+  if (s.ohlcvObserved) {
+    const observed = s.ohlcvObserved;
+    lines.push(
+      `tatum      observed this run: ${observed.singles} single, ${observed.batches} batch, ${observed.credits} credits`,
+    );
   }
   const incomplete = Boolean(s.failures?.length || s.notAttempted?.length || s.resolveErrors.length);
   lines.push(`status     ${incomplete ? "incomplete" : "ok"}`);

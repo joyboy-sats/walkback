@@ -180,6 +180,20 @@ describe("runSeed", () => {
     expect(lines.some((line) => line.includes("post 2/2 post-b"))).toBe(true);
   });
 
+  it("does not write memories for posts the ledger has already applied", async () => {
+    applied.add("post-a");
+    applied.add("post-b");
+    const lines: string[] = [];
+    const result = await runSeed(file, { log: (line) => lines.push(line) });
+    expect(result.ok).toBe(true);
+    expect(ingestMocks.persistIngestWrites).not.toHaveBeenCalled();
+    expect(ingestMocks.markSeedPostApplied).not.toHaveBeenCalled();
+    expect(result.summary).toContain("2 already present");
+    expect(lines.some((line) => line.includes("skipped"))).toBe(true);
+    expect(lines.some((line) => line.includes("tatum OHLCV estimate"))).toBe(true);
+    expect(lines.some((line) => line.includes("tatum OHLCV observed this run: 0 single"))).toBe(true);
+  });
+
   it("continues to the next post when a failure is not a timeout, and still does not mark the failed post", async () => {
     ingestMocks.persistIngestWrites.mockImplementation(async (writes: MemoryWrite[]) => {
       if (writes[0]?.idempotencyKey === "claim:post-a") throw new Error("database down");

@@ -4,6 +4,7 @@ import { claimMemory } from "./memory-text";
 import { exclusionVerdict } from "./scoring-exclusion";
 import {
   chunk,
+  estimateSeedOhlcv,
   formatSeedSummary,
   isSynthetic,
   materializeClaims,
@@ -16,36 +17,93 @@ import {
 const file = parseClaimsFile(JSON.parse(readFileSync("data/claims.json", "utf8")));
 const AS_OF = "2026-10-21T00:00:00.000Z";
 
+const ORIGINAL_PRICE = [
+  {
+    id: "x-waheimagokoro-2112064956904710279",
+    deadline: "2026-11-08T00:00:00.000Z",
+    amount: "2",
+    basis: "seed author; post says the next few weeks",
+  },
+  {
+    id: "x-blackarrowcalls-2111752143938183596",
+    deadline: "2026-11-08T00:00:00.000Z",
+    amount: "1.28",
+    basis: "seed author; trade call, post states no date",
+  },
+  {
+    id: "x-mrcamerontrader-2111749203479154711",
+    deadline: "2026-11-08T00:00:00.000Z",
+    amount: "1.28",
+    basis: "seed author; trade call, post states no date",
+  },
+  {
+    id: "x-cryptowithgopal-2111411796250861956",
+    deadline: "2026-11-08T00:00:00.000Z",
+    amount: "1.28",
+    basis: "seed author; technical analysis, post states no date",
+  },
+  {
+    id: "x-hodlnex-2111007143029625287",
+    deadline: "2026-10-30T00:00:00.000Z",
+    amount: "1.1",
+    basis: "seed author; trade call, post states no date",
+  },
+  {
+    id: "x-gandreou007-2112416018446565762",
+    deadline: "2026-11-08T00:00:00.000Z",
+    amount: "0.88",
+    basis: "seed author; technical analysis, post states no date",
+  },
+] as const;
+
+const BACKUPS = ["otex_03", "KJenrola57368", "OriadeLabs", "DefiGhoul15", "Crypto_MadMaxie"];
+
 describe("data/claims.json", () => {
   const claims = file.posts.flatMap((post) =>
     (post.claims ?? []).map((claim) => ({ post, claim })),
   );
 
-  it("is the real set: 17 posts, 17 claims, no synthetic rows", () => {
-    expect(file.posts).toHaveLength(17);
-    expect(claims).toHaveLength(17);
+  it("is the real set: the original 17 plus the primary historical price posts, no synthetic rows", () => {
+    expect(file.posts).toHaveLength(30);
+    expect(claims).toHaveLength(33);
     expect(file.posts.filter(isSynthetic)).toHaveLength(0);
     expect(claims.filter(({ claim }) => claim.claim_type === "tx_replay")).toHaveLength(11);
-    expect(claims.filter(({ claim }) => claim.claim_type === "price_threshold")).toHaveLength(6);
+    expect(claims.filter(({ claim }) => claim.claim_type === "price_threshold")).toHaveLength(22);
     expect(claims.filter(({ claim }) => claim.claim_type === "balance_threshold")).toHaveLength(0);
-    expect(new Set(file.posts.map((p) => p.handle)).size).toBe(7);
+    expect(new Set(file.posts.map((p) => p.handle)).size).toBe(10);
     expect(file.posts.some((p) => p.handle.toLowerCase().includes("mysqlsui"))).toBe(false);
+    for (const handle of BACKUPS) {
+      expect(file.posts.some((p) => p.handle === handle)).toBe(false);
+    }
+    expect(file.posts.filter((p) => p.handle === "suintern_")).toHaveLength(2);
     for (const post of file.posts) {
       expect(post.source_url?.startsWith("https://x.com/")).toBe(true);
       expect(post.text.toLowerCase()).not.toContain("placeholder");
     }
   });
 
+  it("leaves the original six open price claims on the deadlines they were collected with", () => {
+    for (const expected of ORIGINAL_PRICE) {
+      const post = file.posts.find((p) => p.id === expected.id);
+      expect(post?.claims?.[0]).toMatchObject({
+        deadline: expected.deadline,
+        deadline_basis: expected.basis,
+        params: { amount: expected.amount, evaluation: "touch", symbol: "SUI" },
+      });
+    }
+  });
+
   it("passes the seed checks and would not be voided as a placeholder", () => {
     const dueReplay: string[] = [];
     const pendingPrice: string[] = [];
+    const historicalPrice: string[] = [];
     for (const { post, claim } of claims) {
       expect(post.text.includes(claim.quote)).toBe(true);
       expect(claim.quote.length).toBeLessThanOrEqual(200);
       expect(claim.confidence).toBeGreaterThanOrEqual(0.6);
       const materialized = materializeClaims(post);
-      expect(materialized?.length).toBe(1);
-      const stored = materialized![0]!;
+      expect(materialized?.length).toBe(post.claims?.length);
+      const stored = materialized!.find((item) => item.quote === claim.quote)!;
       expect(exclusionVerdict({ synthetic: false, params: stored.params })).toBeNull();
       if (claim.claim_type === "tx_replay") {
         const since = String(claim.params.since);
@@ -57,16 +115,17 @@ describe("data/claims.json", () => {
         if (claim.deadline <= AS_OF) dueReplay.push(post.id);
       }
       if (claim.claim_type === "price_threshold") {
-        expect(String(claim.params.symbol).toUpperCase()).toBe("SUI");
+        expect(["SUI", "SOL", "ETH", "BTC"]).toContain(String(claim.params.symbol).toUpperCase());
         expect(String(claim.params.quote ?? "USD").toUpperCase()).toBe("USD");
         expect(claim.params.evaluation).toBe("touch");
         expect(claim.params.since).toBe(post.published_at);
         expect(stored.params).toMatchObject({ evaluation: "touch", since: post.published_at });
         expect(claim.deadline_basis?.length).toBeGreaterThan(0);
+        expect(claim.deadline_basis!.length).toBeLessThanOrEqual(160);
         expect(stored.deadlineBasis).toBe(claim.deadline_basis);
-        expect(claim.deadline > AS_OF).toBe(true);
         expect(post.sui_address).toBeUndefined();
-        pendingPrice.push(post.id);
+        if (claim.deadline > AS_OF) pendingPrice.push(post.id);
+        else historicalPrice.push(`${post.handle}:${claim.params.symbol}:${claim.params.amount}`);
       }
     }
     expect(dueReplay).toHaveLength(11);
@@ -74,6 +133,42 @@ describe("data/claims.json", () => {
     expect(pendingPrice.every((id) => claims.find((c) => c.post.id === id)!.claim.deadline >= "2026-10-30")).toBe(
       true,
     );
+    expect(historicalPrice).toHaveLength(16);
+    const trade = claims.filter(({ claim }) => claim.deadline_basis?.startsWith("benchmark convention: trade"));
+    const ta = claims.filter(({ claim }) => claim.deadline_basis?.startsWith("benchmark convention: technical"));
+    expect(trade).toHaveLength(3);
+    expect(ta).toHaveLength(3);
+    for (const { post, claim } of trade) {
+      expect(Date.parse(claim.deadline) - Date.parse(post.published_at)).toBe(7 * 86_400_000);
+    }
+    for (const { post, claim } of ta) {
+      expect(Date.parse(claim.deadline) - Date.parse(post.published_at)).toBe(14 * 86_400_000);
+    }
+  });
+
+  it("plans an already-applied post as a skip, so a rerun does not write it again", () => {
+    for (const post of file.posts.slice(0, 17)) {
+      const decision = planSeedPost({
+        expectedClaimCount: post.claims?.length ?? 0,
+        applied: true,
+        claims: (post.claims ?? []).map((_, index) => ({ index, walrusBlobId: "blob" })),
+        source: { exists: true, walrusBlobId: "blob-src", memoryLogged: true },
+      });
+      expect(decision.action).toBe("skip");
+      expect(decision.writeSourceMemory).toBe(false);
+      expect(decision.pendingClaimIndexes).toEqual([]);
+    }
+  });
+
+  it("estimates Tatum credits for the past-deadline price claims and leaves the open six out", () => {
+    const estimate = estimateSeedOhlcv(file.posts, new Date("2026-10-23T00:00:00.000Z"));
+    expect(estimate.claims).toBe(16);
+    expect(estimate.singleCalls).toBe(0);
+    expect(estimate.batchCalls).toBe(124);
+    expect(estimate.credits).toBe(62_000);
+    expect(estimate.refinementCapCredits).toBe(16 * 2000);
+    expect(estimate.credits).toBeLessThan(99_000);
+    expect(estimate.credits + estimate.refinementCapCredits).toBeLessThan(99_000);
   });
 
   it("omits the replay whose quote names a different address than the one stored", () => {

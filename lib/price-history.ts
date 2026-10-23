@@ -7,11 +7,19 @@
  * hourly series is a void, not a reason to switch to a coarser bucket — a
  * daily high would paper over the missing hour.
  *
- * The feed's bucket is the resolution of the check. A candle that overlaps
- * the window is kept, so the first bucket can start up to one interval before
- * `from` and the last bucket can end up to one interval after `to`. Those
- * slivers are recorded on the result. A candle that merely opens at `to`
- * is not kept: its range is after the deadline.
+ * A touch is strict about the window. A candle whose whole bucket sits inside
+ * [from, to) can establish one: its high or low printed in the window, and
+ * that decimal is compared to the target without rounding. A candle that
+ * overlaps the window but sticks out past `from` or `to` can only refute a
+ * touch. Its high and low bound the overlap, and the extreme may have printed
+ * outside. When the verdict depends on that partial bucket, or the edge is
+ * missing, the overlap is re-read at a finer interval (one minute for an
+ * hour, one hour for a day). If the finer series still cannot place the
+ * extreme inside the window, or does not cover the slice, the claim is void.
+ *
+ * The read starts one interval before `from` so the opening hour is present
+ * to act as a bound. A candle that merely opens at `to` is not kept: its
+ * range is after the deadline.
  */
 import {
   DAILY_PAGE_BUDGET,
@@ -20,9 +28,11 @@ import {
   OHLCV_PAGE_SIZE,
   TATUM_OHLCV_SOURCE,
   candleEndExclusiveMs,
-  decidingExtreme,
-  hourlyPagesFor,
+  candleHighText,
+  candleLowText,
+  priceMeets,
   spanMatchesInterval,
+  touchIntervalFor,
   windowExtremes,
   type PriceCandle,
   type PriceExtreme,
@@ -68,9 +78,33 @@ export interface TouchSeries {
   candles: PriceCandle[];
   boundary: WindowBoundary;
   requests: number;
+  /** True when an in-window print meets the target. Compared unrounded. */
+  touched: boolean;
   maxHigh: PriceExtreme;
   minLow: PriceExtreme;
+  /** The print the verdict uses. `bound` means it only limits a partial candle. */
   extreme: PriceExtreme;
+  /** Highest high whose bucket is entirely inside the window, when one exists. */
+  windowHigh: PriceExtreme | null;
+  /** Lowest low whose bucket is entirely inside the window, when one exists. */
+  windowLow: PriceExtreme | null;
+  /** Max high of every overlapping candle. A partial candle cannot be higher inside the window. */
+  highAtMost: PriceExtreme | null;
+  /** Min low of every overlapping candle. A partial candle cannot be lower inside the window. */
+  lowAtLeast: PriceExtreme | null;
+  decidingCandles: DecidingCandle[];
+}
+
+export type CandleWindowRole = "interior" | "leading" | "trailing" | "spanning";
+
+export interface DecidingCandle {
+  openTime: string;
+  closeTime: string;
+  high: string;
+  low: string;
+  role: CandleWindowRole | "refined";
+  /** `establishes` meets the target inside the window. `bound` shows the overlap cannot. */
+  usedAs: "establishes" | "bound";
 }
 
 export interface DeadlinePrint {
@@ -97,7 +131,7 @@ export type DeadlineLoad = DeadlinePrint | PriceCheckFailure;
 
 export async function loadTouchWindow(
   source: PriceHistorySource,
-  input: { symbol: string; from: string; to: string; direction: "gte" | "lte" },
+  input: { symbol: string; from: string; to: string; direction: "gte" | "lte"; threshold: string },
 ): Promise<TouchLoad> {
   const fromMs = Date.parse(input.from);
   const toMs = Date.parse(input.to);
@@ -115,13 +149,13 @@ export async function loadTouchWindow(
     window: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
   };
 
-  const preferDaily = hourlyPagesFor(toMs - fromMs) > HOURLY_PAGE_BUDGET;
+  const preferDaily = touchIntervalFor(fromMs, toMs) === "1d";
   if (!preferDaily) {
     const hourly = await readInterval(source, input.symbol, fromMs, toMs, "1h", HOURLY_PAGE_BUDGET);
     if (hourly.kind === "unsupported") return unsupported(input.symbol, base);
     if (hourly.kind === "mismatch") return mismatch(input.symbol, hourly.symbol, base);
     if (hourly.kind === "candles" && hourly.candles.length > 0) {
-      return finishTouch(input, "1h", hourly.candles, hourly.requests, fromMs, toMs);
+      return finishTouch(source, input, "1h", hourly.candles, hourly.requests, fromMs, toMs);
     }
     if (hourly.kind === "budget") {
       return fail(
@@ -216,7 +250,7 @@ export async function loadDeadlinePrice(
 
 async function readDaily(
   source: PriceHistorySource,
-  input: { symbol: string; direction: "gte" | "lte" },
+  input: { symbol: string; direction: "gte" | "lte"; threshold: string },
   fromMs: number,
   toMs: number,
   base: Record<string, unknown>,
@@ -243,38 +277,85 @@ async function readDaily(
       { ...base, intervalFallback },
     );
   }
-  return finishTouch(input, "1d", daily.candles, daily.requests, fromMs, toMs, intervalFallback);
+  return finishTouch(source, input, "1d", daily.candles, daily.requests, fromMs, toMs, intervalFallback);
 }
 
-function finishTouch(
-  input: { symbol: string; direction: "gte" | "lte" },
+async function finishTouch(
+  source: PriceHistorySource,
+  input: { symbol: string; direction: "gte" | "lte"; threshold: string },
   interval: PriceInterval,
   candles: PriceCandle[],
   requests: number,
   fromMs: number,
   toMs: number,
   intervalFallback?: string,
-): TouchLoad {
+): Promise<TouchLoad> {
   const covered = coverWindow(candles, fromMs, toMs, interval);
+  const base = {
+    source: TATUM_OHLCV_SOURCE,
+    symbol: input.symbol,
+    quote: "USD",
+    interval,
+    ...(intervalFallback ? { intervalFallback } : {}),
+    window: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
+    threshold: input.threshold,
+    priceCompare: "unrounded",
+    strictWindow: true,
+  };
   if (!covered.ok) {
-    return fail(covered.reason, {
-      source: TATUM_OHLCV_SOURCE,
-      symbol: input.symbol,
-      quote: "USD",
-      interval,
-      ...(intervalFallback ? { intervalFallback } : {}),
-      window: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
-      ...covered.evidence,
-    });
+    return fail(covered.reason, { ...base, ...covered.evidence });
   }
-  const extremes = windowExtremes(covered.candles);
-  const extreme = decidingExtreme(covered.candles, input.direction);
-  if (!extremes || !extreme) {
+  if (priceMeets(input.threshold, input.threshold, input.direction) === null) {
     return fail(
-      `Tatum returned no ${input.symbol}/USD candles inside the window, so the claim was not checked.`,
-      { source: TATUM_OHLCV_SOURCE, interval },
+      `The price threshold "${input.threshold}" is not a decimal, so the claim was not checked.`,
+      base,
     );
   }
+
+  let judgment = judgeWindowTouch(covered.candles, fromMs, toMs, interval, input.direction, input.threshold, {
+    uncoveredStartMs: covered.boundary.uncoveredStartMs,
+    uncoveredEndMs: covered.boundary.uncoveredEndMs,
+  });
+  let spent = requests;
+
+  if (judgment.unreadable) {
+    return fail(
+      `A ${input.symbol}/USD candle price was not a decimal, so the claim was not checked.`,
+      { ...base, decidingCandles: judgment.decidingCandles },
+    );
+  }
+
+  if (judgment.ambiguous) {
+    const refined = await refineSlices(
+      source,
+      input,
+      interval,
+      judgment.slices,
+      0,
+    );
+    spent += refined.requests;
+    if (!refined.ok) {
+      return fail(refined.reason, {
+        ...base,
+        ...refined.evidence,
+        decidingCandles: judgment.decidingCandles,
+        windowHigh: judgment.windowHigh,
+        windowLow: judgment.windowLow,
+        requests: spent,
+      });
+    }
+    judgment = combineRefinement(judgment, refined.judgment, input.direction);
+  }
+
+  if (!judgment.extreme) {
+    return fail(
+      `Tatum returned no ${input.symbol}/USD candles inside the window, so the claim was not checked.`,
+      { ...base, requests: spent },
+    );
+  }
+
+  const maxHigh = judgment.windowHigh ?? judgment.highAtMost ?? judgment.extreme;
+  const minLow = judgment.windowLow ?? judgment.lowAtLeast ?? judgment.extreme;
   return {
     ok: true,
     source: TATUM_OHLCV_SOURCE,
@@ -282,10 +363,16 @@ function finishTouch(
     ...(intervalFallback ? { intervalFallback } : {}),
     candles: covered.candles,
     boundary: covered.boundary,
-    requests,
-    maxHigh: extremes.maxHigh,
-    minLow: extremes.minLow,
-    extreme,
+    requests: spent,
+    touched: judgment.touched,
+    maxHigh,
+    minLow,
+    extreme: judgment.extreme,
+    windowHigh: judgment.windowHigh,
+    windowLow: judgment.windowLow,
+    highAtMost: judgment.highAtMost,
+    lowAtLeast: judgment.lowAtLeast,
+    decidingCandles: judgment.decidingCandles,
   };
 }
 
@@ -306,7 +393,10 @@ async function readInterval(
 ): Promise<ReadResult> {
   const candles: PriceCandle[] = [];
   const seen = new Set<number>();
-  let cursor = fromMs;
+  // One interval early, so the hour (or day) that contains `fromMs` is loaded
+  // and can bound the opening slice. The window filter drops anything that
+  // ends at or before `fromMs`.
+  let cursor = Math.max(0, fromMs - INTERVAL_MS[interval]);
   let requests = 0;
 
   while (cursor < toMs) {
@@ -349,6 +439,365 @@ async function readInterval(
   }
 
   return { kind: "candles", candles, requests };
+}
+
+export interface TouchSlice {
+  fromMs: number;
+  toMs: number;
+}
+
+export interface WindowTouchJudgment {
+  touched: boolean;
+  ambiguous: boolean;
+  unreadable: boolean;
+  slices: TouchSlice[];
+  windowHigh: PriceExtreme | null;
+  windowLow: PriceExtreme | null;
+  highAtMost: PriceExtreme | null;
+  lowAtLeast: PriceExtreme | null;
+  decidingCandles: DecidingCandle[];
+  extreme: PriceExtreme | null;
+}
+
+export function candleWindowRole(
+  candle: PriceCandle,
+  fromMs: number,
+  toMs: number,
+  interval: PriceInterval,
+): CandleWindowRole | "outside" {
+  const end = candleEndExclusiveMs(candle, interval);
+  if (end === null) return "outside";
+  if (!(candle.openTimeMs < toMs && end > fromMs)) return "outside";
+  const startsInside = candle.openTimeMs >= fromMs;
+  const endsInside = end <= toMs;
+  if (startsInside && endsInside) return "interior";
+  if (!startsInside && !endsInside) return "spanning";
+  if (!startsInside) return "leading";
+  return "trailing";
+}
+
+/**
+ * Decide a touch from candles that already overlap [fromMs, toMs).
+ *
+ * Interior candles (the whole bucket is inside the window) can establish a
+ * touch. A partial candle establishes nothing: if its extreme misses the
+ * target, the overlap misses too; if its extreme hits, the hit may be
+ * outside and the slice is returned for a finer read.
+ */
+export function judgeWindowTouch(
+  candles: readonly PriceCandle[],
+  fromMs: number,
+  toMs: number,
+  interval: PriceInterval,
+  direction: "gte" | "lte",
+  threshold: string,
+  gaps: { uncoveredStartMs: number; uncoveredEndMs: number },
+): WindowTouchJudgment {
+  const interior: PriceCandle[] = [];
+  const partial: Array<{ candle: PriceCandle; role: Exclude<CandleWindowRole, "interior"> }> = [];
+  let unreadable = false;
+
+  for (const candle of candles) {
+    const role = candleWindowRole(candle, fromMs, toMs, interval);
+    if (role === "outside") continue;
+    const hit = candleMeets(candle, direction, threshold);
+    if (hit === null) unreadable = true;
+    if (role === "interior") interior.push(candle);
+    else partial.push({ candle, role });
+  }
+
+  const interiorExtremes = windowExtremes(interior);
+  const overlapping = [...interior, ...partial.map((item) => item.candle)];
+  const overlapExtremes = windowExtremes(overlapping);
+  const proven = interior.find((candle) => candleMeets(candle, direction, threshold) === true);
+
+  if (proven && interiorExtremes) {
+    const field = direction === "gte" ? "high" : "low";
+    const chosen =
+      interior.find((candle) => candle.openTime === (field === "high" ? interiorExtremes.maxHigh.at : interiorExtremes.minLow.at)) ??
+      proven;
+    const establishes = candleMeets(chosen, direction, threshold) === true ? chosen : proven;
+    return {
+      touched: true,
+      ambiguous: false,
+      unreadable: false,
+      slices: [],
+      windowHigh: interiorExtremes.maxHigh,
+      windowLow: interiorExtremes.minLow,
+      highAtMost: interiorExtremes.maxHigh,
+      lowAtLeast: interiorExtremes.minLow,
+      decidingCandles: [decidingFrom(establishes, "interior", "establishes")],
+      extreme: extremeFrom(establishes, field, false),
+    };
+  }
+
+  const slices: TouchSlice[] = [];
+  const bounding: Array<{ candle: PriceCandle; role: Exclude<CandleWindowRole, "interior"> }> = [];
+  for (const item of partial) {
+    const hit = candleMeets(item.candle, direction, threshold);
+    if (hit === null) continue;
+    if (hit) {
+      const end = candleEndExclusiveMs(item.candle, interval)!;
+      slices.push({ fromMs: Math.max(item.candle.openTimeMs, fromMs), toMs: Math.min(end, toMs) });
+    } else {
+      bounding.push(item);
+    }
+  }
+  if (gaps.uncoveredStartMs > 0) slices.push({ fromMs, toMs: fromMs + gaps.uncoveredStartMs });
+  if (gaps.uncoveredEndMs > 0) slices.push({ fromMs: toMs - gaps.uncoveredEndMs, toMs });
+  const merged = mergeSlices(slices);
+
+  if (unreadable || merged.length > 0) {
+    return {
+      touched: false,
+      ambiguous: true,
+      unreadable,
+      slices: merged,
+      windowHigh: interiorExtremes?.maxHigh ?? null,
+      windowLow: interiorExtremes?.minLow ?? null,
+      highAtMost: overlapExtremes?.maxHigh ? { ...overlapExtremes.maxHigh, bound: true } : null,
+      lowAtLeast: overlapExtremes?.minLow ? { ...overlapExtremes.minLow, bound: true } : null,
+      decidingCandles: partial
+        .filter((item) => candleMeets(item.candle, direction, threshold) === true)
+        .map((item) => decidingFrom(item.candle, item.role, "bound")),
+      extreme: null,
+    };
+  }
+
+  const field = direction === "gte" ? "high" : "low";
+  const boundExtreme = field === "high" ? overlapExtremes?.maxHigh ?? null : overlapExtremes?.minLow ?? null;
+  const boundCandle = boundExtreme ? overlapping.find((candle) => candle.openTime === boundExtreme.at) : undefined;
+  const role = boundCandle ? candleWindowRole(boundCandle, fromMs, toMs, interval) : "outside";
+  const isBound = role !== "interior";
+  return {
+    touched: false,
+    ambiguous: false,
+    unreadable: false,
+    slices: [],
+    windowHigh: interiorExtremes?.maxHigh ?? null,
+    windowLow: interiorExtremes?.minLow ?? null,
+    highAtMost: overlapExtremes?.maxHigh ? { ...overlapExtremes.maxHigh, ...(isBound ? { bound: true } : {}) } : null,
+    lowAtLeast: overlapExtremes?.minLow ? { ...overlapExtremes.minLow, ...(isBound ? { bound: true } : {}) } : null,
+    decidingCandles:
+      boundCandle && role !== "outside"
+        ? [decidingFrom(boundCandle, role, "bound")]
+        : bounding.map((item) => decidingFrom(item.candle, item.role, "bound")),
+    extreme: boundExtreme ? { ...boundExtreme, ...(isBound ? { bound: true } : {}) } : null,
+  };
+}
+
+function finerThan(interval: PriceInterval): PriceInterval | null {
+  if (interval === "1d") return "1h";
+  if (interval === "1h") return "1m";
+  return null;
+}
+
+/** Calls allowed while settling one partial bucket. One hour is two minute pages; one day is one hourly page. */
+const REFINEMENT_CALLS: Record<PriceInterval, number> = { "1m": 1, "1h": 3, "1d": 2 };
+
+async function refineSlices(
+  source: PriceHistorySource,
+  input: { symbol: string; direction: "gte" | "lte"; threshold: string },
+  coarse: PriceInterval,
+  slices: readonly TouchSlice[],
+  depth: number,
+): Promise<{ ok: true; judgment: WindowTouchJudgment; requests: number } | { ok: false; reason: string; evidence: Record<string, unknown>; requests: number }> {
+  const finer = finerThan(coarse);
+  if (!finer || depth > 2) {
+    return {
+      ok: false,
+      requests: 0,
+      reason:
+        "A price at the edge of the window could not be placed inside it, so the claim was not checked.",
+      evidence: { timingAmbiguity: true, interval: coarse },
+    };
+  }
+
+  let requests = 0;
+  let touched: WindowTouchJudgment | null = null;
+  const misses: WindowTouchJudgment[] = [];
+
+  for (const slice of slices) {
+    if (!(slice.toMs > slice.fromMs)) continue;
+    const read = await readInterval(
+      source,
+      input.symbol,
+      slice.fromMs,
+      slice.toMs,
+      finer,
+      REFINEMENT_CALLS[finer],
+    );
+    requests += read.kind === "candles" ? read.requests : read.kind === "budget" ? REFINEMENT_CALLS[finer] : 1;
+    if (read.kind !== "candles") {
+      return {
+        ok: false,
+        requests,
+        reason: refinementFailure(input.symbol, finer, read.kind),
+        evidence: { timingAmbiguity: true, interval: finer, refinement: read.kind },
+      };
+    }
+    const covered = coverWindow(read.candles, slice.fromMs, slice.toMs, finer);
+    if (!covered.ok) {
+      return {
+        ok: false,
+        requests,
+        reason: covered.reason,
+        evidence: { timingAmbiguity: true, interval: finer, ...covered.evidence },
+      };
+    }
+    let judgment = judgeWindowTouch(
+      covered.candles,
+      slice.fromMs,
+      slice.toMs,
+      finer,
+      input.direction,
+      input.threshold,
+      covered.boundary,
+    );
+    if (judgment.unreadable) {
+      return {
+        ok: false,
+        requests,
+        reason: `A ${input.symbol}/USD candle price was not a decimal, so the claim was not checked.`,
+        evidence: { interval: finer },
+      };
+    }
+    if (judgment.ambiguous) {
+      const nested = await refineSlices(source, input, finer, judgment.slices, depth + 1);
+      requests += nested.requests;
+      if (!nested.ok) return { ...nested, requests };
+      judgment = combineRefinement(judgment, nested.judgment, input.direction);
+    }
+    judgment = {
+      ...judgment,
+      decidingCandles: judgment.decidingCandles.map((candle) => ({ ...candle, role: "refined" as const })),
+    };
+    if (judgment.touched) {
+      touched = judgment;
+      break;
+    }
+    misses.push(judgment);
+  }
+
+  if (touched) return { ok: true, judgment: touched, requests };
+  return { ok: true, judgment: foldMisses(misses, input.direction), requests };
+}
+
+function combineRefinement(
+  parent: WindowTouchJudgment,
+  refined: WindowTouchJudgment,
+  direction: "gte" | "lte",
+): WindowTouchJudgment {
+  if (refined.touched) {
+    return {
+      ...refined,
+      windowHigh: laterExtreme(parent.windowHigh, refined.windowHigh, "high"),
+      windowLow: laterExtreme(parent.windowLow, refined.windowLow, "low"),
+      decidingCandles: [...refined.decidingCandles],
+    };
+  }
+  // The coarse partial candle is replaced by the finer series. Keep only
+  // interior prints from the parent; its overlapping high may sit outside.
+  return foldMisses([settledParent(parent), refined], direction);
+}
+
+/** Interior prints survive refinement. The partial candle that forced the finer read does not. */
+function settledParent(parent: WindowTouchJudgment): WindowTouchJudgment {
+  return {
+    ...parent,
+    ambiguous: false,
+    touched: false,
+    slices: [],
+    decidingCandles: [],
+    highAtMost: parent.windowHigh,
+    lowAtLeast: parent.windowLow,
+    extreme: parent.windowHigh ?? parent.windowLow,
+  };
+}
+
+function foldMisses(parts: readonly WindowTouchJudgment[], direction: "gte" | "lte"): WindowTouchJudgment {
+  const usable = parts.filter((part) => part.extreme || part.windowHigh || part.windowLow || part.highAtMost || part.lowAtLeast);
+  const windowHigh = usable.reduce<PriceExtreme | null>((acc, part) => laterExtreme(acc, part.windowHigh, "high"), null);
+  const windowLow = usable.reduce<PriceExtreme | null>((acc, part) => laterExtreme(acc, part.windowLow, "low"), null);
+  const highAtMost = usable.reduce<PriceExtreme | null>(
+    (acc, part) => laterExtreme(acc, part.highAtMost ?? part.windowHigh, "high"),
+    null,
+  );
+  const lowAtLeast = usable.reduce<PriceExtreme | null>(
+    (acc, part) => laterExtreme(acc, part.lowAtLeast ?? part.windowLow, "low"),
+    null,
+  );
+  const extreme = direction === "gte" ? highAtMost ?? windowHigh : lowAtLeast ?? windowLow;
+  return {
+    touched: false,
+    ambiguous: false,
+    unreadable: false,
+    slices: [],
+    windowHigh,
+    windowLow,
+    highAtMost,
+    lowAtLeast,
+    decidingCandles: usable.flatMap((part) => part.decidingCandles),
+    extreme,
+  };
+}
+
+function laterExtreme(
+  current: PriceExtreme | null,
+  next: PriceExtreme | null,
+  field: "high" | "low",
+): PriceExtreme | null {
+  if (!next) return current;
+  if (!current) return next;
+  const cmp = priceMeets(next.text, current.text, field === "high" ? "gte" : "lte");
+  if (cmp === null) return field === "high" ? (next.value >= current.value ? next : current) : next.value <= current.value ? next : current;
+  return cmp ? next : current;
+}
+
+function refinementFailure(symbol: string, interval: PriceInterval, kind: string): string {
+  if (kind === "budget") {
+    return `Tatum ${symbol}/USD ${interval} history for the window edge was not fully read, so the claim was not checked.`;
+  }
+  return `Tatum could not place the ${symbol}/USD price inside the window edge (${interval}), so the claim was not checked.`;
+}
+
+function candleMeets(candle: PriceCandle, direction: "gte" | "lte", threshold: string): boolean | null {
+  const text = direction === "gte" ? candleHighText(candle) : candleLowText(candle);
+  return priceMeets(text, threshold, direction);
+}
+
+function extremeFrom(candle: PriceCandle, field: "high" | "low", bound: boolean): PriceExtreme {
+  const text = field === "high" ? candleHighText(candle) : candleLowText(candle);
+  return {
+    value: field === "high" ? candle.high : candle.low,
+    text,
+    at: candle.openTime,
+    field,
+    candleClose: candle.closeTime,
+    ...(bound ? { bound: true } : {}),
+  };
+}
+
+function decidingFrom(candle: PriceCandle, role: CandleWindowRole, usedAs: DecidingCandle["usedAs"]): DecidingCandle {
+  return {
+    openTime: candle.openTime,
+    closeTime: candle.closeTime,
+    high: candleHighText(candle),
+    low: candleLowText(candle),
+    role,
+    usedAs,
+  };
+}
+
+function mergeSlices(slices: readonly TouchSlice[]): TouchSlice[] {
+  const sorted = slices.filter((slice) => slice.toMs > slice.fromMs).sort((a, b) => a.fromMs - b.fromMs);
+  const out: TouchSlice[] = [];
+  for (const slice of sorted) {
+    const last = out[out.length - 1];
+    if (last && slice.fromMs <= last.toMs) last.toMs = Math.max(last.toMs, slice.toMs);
+    else out.push({ ...slice });
+  }
+  return out;
 }
 
 export function coverWindow(
