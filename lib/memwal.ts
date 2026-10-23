@@ -13,8 +13,12 @@
  *      Never call this from a request path that a user is waiting on. Bulk
  *      writes amortise to ~6s/item; single writes do not.
  *
- *   3. The delegate key is limited to 30 points/minute. `memwalWriteLimiter`
- *      gates every write.
+ *   3. The delegate key is limited to 60 weighted requests per minute, and
+ *      status polls count. `memwalWriteLimiter` is process-local. The shared
+ *      cap is `acquireSharedWriteBudget`, and `withMemwalWriteLock` lets one
+ *      `rememberAndWait` run at a time across the seed and the worker. A 429
+ *      waits out `retry_after_seconds` (at least 60s). A recall is one
+ *      weighted request on that same shared window.
  *
  * Also note: `remember` is append-only. There is no upsert, no update and no
  * delete in the public `MemWal` class (`forget`/`clear` exist only on
@@ -27,10 +31,12 @@
 import "server-only";
 
 import { MemWal } from "@mysten-incubation/memwal";
-import { errorMessage, isDeadlineError, withFetchDeadline, withRetry } from "./bounded";
+import { errorMessage, isDeadlineError, isRateLimited, retryAfterSeconds, withFetchDeadline, withRetry } from "./bounded";
 import { writeDurable, type DurableStepResult } from "./durable-writes";
 import { isReplay } from "./env";
 import { requireMemwalConfig } from "./memwal-config";
+import { withMemwalWriteLock } from "./resolve-lock";
+import { acquireSharedWriteBudget } from "./write-budget";
 import {
   LIST_PAGE_LIMIT,
   ListUnavailableError,
@@ -39,7 +45,14 @@ import {
   type ListWalkResult,
   type MemoriesPage,
 } from "./memory-list";
-import { memwalReadLimiter, memwalWriteLimiter } from "./ratelimit";
+import {
+  memwalReadLimiter,
+  memwalWriteLimiter,
+  RATE_LIMIT_FLOOR_MS,
+  RECALL_REQUEST_WEIGHT,
+  REMEMBER_POLL_INTERVAL_MS,
+  REMEMBER_WRITE_WEIGHT,
+} from "./ratelimit";
 import type { Namespace } from "./types";
 
 /** Server-side hard limit for one bulk call. */
@@ -64,7 +77,10 @@ export const REMEMBER_CALL_TIMEOUT_MS = REMEMBER_POLL_TIMEOUT_MS + 60_000;
 /** One try plus two retries. Each try has the deadline above. */
 export const REMEMBER_ATTEMPTS = 3;
 
-/** Backoff after the first failed attempt. The next wait doubles, capped at 30s. */
+/**
+ * Backoff after a retryable failure that is not a 429. The next wait doubles,
+ * capped at 30s. A 429 ignores this curve and waits at least a minute.
+ */
 export const REMEMBER_BACKOFF_MS = 2_000;
 
 let client: MemWal | null = null;
@@ -153,13 +169,15 @@ export async function writeMemory(w: MemoryWrite, options?: RememberOptions): Pr
   const started = Date.now();
   const result = await withRetry(
     async () => {
-      await memwalWriteLimiter.acquire();
+      await memwalWriteLimiter.acquire(REMEMBER_WRITE_WEIGHT);
+      return withMemwalWriteLock(async () => {
+      await acquireSharedWriteBudget(REMEMBER_WRITE_WEIGHT);
       try {
         const res = await withFetchDeadline(
           () =>
             getClient().rememberAndWait(w.text, w.namespace, {
               idempotencyKey: w.idempotencyKey,
-              pollIntervalMs: 1000,
+              pollIntervalMs: REMEMBER_POLL_INTERVAL_MS,
               timeoutMs: REMEMBER_POLL_TIMEOUT_MS,
             }),
           timeoutMs,
@@ -173,12 +191,20 @@ export async function writeMemory(w: MemoryWrite, options?: RememberOptions): Pr
         if (isDeadlineError(err)) destroyMemwal();
         throw err;
       }
+      });
     },
     {
       attempts,
       backoffMs,
       ...(options?.maxBackoffMs !== undefined ? { maxBackoffMs: options.maxBackoffMs } : {}),
       ...(options?.sleep ? { sleep: options.sleep } : {}),
+      // A 429's retry-after is often 60s. The default 30s cap would start
+      // another accept and another poll loop inside the same minute.
+      delayFor(err, attempt) {
+        if (!isRateLimited(err)) return Math.min(30_000, backoffMs * 2 ** (attempt - 1));
+        const asked = retryAfterSeconds(err);
+        return Math.max(RATE_LIMIT_FLOOR_MS, asked === undefined ? 0 : asked * 1000);
+      },
       onRetry(info) {
         const error = errorMessage(info.error);
         if (options?.observer?.onRetry) {
@@ -287,10 +313,12 @@ export interface RecallArgs {
  * ordering by a column and no exact match. Treat hits as evidence to be
  * re-parsed, not as rows.
  *
- * Reads are not rate-limited — they are cheap, and stalling the UI for them
- * would be pointless.
+ * Charged as one weighted request on the shared MemWal window. A failure
+ * throws. Callers must not treat that as an empty ledger and write.
  */
 export async function recallMemory(a: RecallArgs): Promise<RecallHit[]> {
+  await memwalWriteLimiter.acquire(RECALL_REQUEST_WEIGHT);
+  await acquireSharedWriteBudget(RECALL_REQUEST_WEIGHT);
   const res = await getClient().recall({
     query: a.query,
     namespace: a.namespace,

@@ -105,7 +105,7 @@ async function main() {
         `Marker ${MARK}. If you can read this back through recall, the ` +
         `delegate key, account id and mainnet relayer are all working.`,
       NS,
-      { pollIntervalMs: 1000, timeoutMs: 120_000, idempotencyKey: MARK },
+      { pollIntervalMs: 5_000, timeoutMs: 120_000, idempotencyKey: MARK },
     );
     const writeMs = Date.now() - t0;
     console.log(`blob_id        ${written.blob_id}`);
@@ -171,7 +171,7 @@ async function main() {
     console.log(`  MEMWAL_AGENT_ID   ${pub}`);
     console.log(`  SUI address       (from memory.walrus.xyz account page)\n`);
     console.log(`Write cost: ${(writeMs / 1000).toFixed(1)}s for one memory.`);
-    console.log(`Plan your seed batch against the 30 points/minute delegate limit.\n`);
+    console.log(`Plan your seed batch against the 60 weighted-request/minute delegate limit. Status polls count.\n`);
     return 0;
   } finally {
     memwal.destroy();

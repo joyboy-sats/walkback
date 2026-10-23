@@ -41,6 +41,13 @@ export function configureDbPool(config: {
   poolConfig = config;
 }
 
+/** The pool `getDb()` opened. Advisory locks reserve a connection from it. */
+export function getSql() {
+  getDb();
+  if (!sql) throw new Error("database pool is not open");
+  return sql;
+}
+
 export function getDb() {
   if (db) return db;
   const url = env().DATABASE_URL;

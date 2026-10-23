@@ -29,6 +29,13 @@
       "when": 1792605993812,
       "tag": "0003_deadline_basis",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792700000000,
+      "tag": "0004_memwal_write_budget",
+      "breakpoints": true
     }
   ]
 }

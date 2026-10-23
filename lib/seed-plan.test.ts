@@ -174,6 +174,24 @@ describe("data/claims.json", () => {
     expect(estimate.worstCredits).toBeLessThan(99_000);
   });
 
+  it("drops a resolved external id from the credit estimate", () => {
+    const now = new Date("2026-10-23T00:00:00.000Z");
+    const full = estimateSeedOhlcv(file.posts, now);
+    let externalId = "";
+    for (const post of file.posts) {
+      const index = post.claims?.findIndex(
+        (claim) => claim.claim_type === "price_threshold" && Date.parse(claim.deadline) <= now.getTime(),
+      );
+      if (index !== undefined && index >= 0) {
+        externalId = plannedClaimIdentity(post.id, index).externalId;
+        break;
+      }
+    }
+    const reduced = estimateSeedOhlcv(file.posts, now, { resolvedExternalIds: new Set([externalId]) });
+    expect(reduced.claims).toBe(full.claims - 1);
+    expect(reduced.credits).toBe(full.credits - 500);
+  });
+
   it("omits the replay whose quote names a different address than the one stored", () => {
     expect(file.posts.some((p) => p.id === "x-onchainwatch-2110064092434104572")).toBe(false);
     expect(file.posts.some((p) => p.text.includes("0x1ae70480"))).toBe(false);

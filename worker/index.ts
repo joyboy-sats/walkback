@@ -28,7 +28,7 @@ import {
   DUE_CLAIM_SCAN_LIMIT,
   PERIODIC_RESOLVE_LIMIT,
 } from "../lib/resolve-schedule";
-import { listDueClaimIds } from "../lib/resolve";
+import { listDueClaimIds, listUnlinkedResolutionIds } from "../lib/resolve";
 import { boot } from "../backend/boot";
 import { dispatchJob } from "./dispatch";
 
@@ -73,7 +73,9 @@ async function maybeEnqueueResolve(): Promise<void> {
 
   const openJob = await hasOpenJob("resolve");
   const now = new Date();
-  const dueIds = openJob ? [] : await listDueClaimIds(now, DUE_CLAIM_SCAN_LIMIT);
+  const duePending = openJob ? [] : await listDueClaimIds(now, DUE_CLAIM_SCAN_LIMIT);
+  const unlinked = openJob ? [] : await listUnlinkedResolutionIds(DUE_CLAIM_SCAN_LIMIT);
+  const dueIds = [...new Set([...duePending, ...unlinked])];
   const attempts = openJob || dueIds.length === 0 ? [] : await recentResolveAttempts();
   const decision = decidePeriodicResolve({
     enabled: true,
@@ -89,6 +91,10 @@ async function maybeEnqueueResolve(): Promise<void> {
     else if (decision.reason === "idle") console.log("[worker] no claim is pending past its deadline");
     else if (decision.reason === "backoff") {
       console.log(`[worker] ${dueIds.length} due claim(s) still in failure backoff`);
+    } else if (decision.reason === "parked") {
+      console.log(
+        `[worker] ${dueIds.length} due claim(s) parked after an idempotency conflict; the periodic pass will not retry them`,
+      );
     }
     return;
   }

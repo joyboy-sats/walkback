@@ -207,6 +207,16 @@ export const memoryLog = pgTable(
 );
 
 /**
+ * One shared MemWal write budget for every process that has `DATABASE_URL`.
+ * The in-process bucket cannot see the seed and the worker at the same time.
+ */
+export const memwalWriteBudget = pgTable("memwal_write_budget", {
+  id: text("id").primaryKey(),
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+  used: integer("used").notNull(),
+});
+
+/**
  * One row per seeded post. `applied_at` is set only after every memory for
  * that post has been persisted. A rerun that sees the timestamp skips the
  * post. A rerun that does not resumes whatever blob ids are still missing.

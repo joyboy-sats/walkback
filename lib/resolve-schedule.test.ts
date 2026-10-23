@@ -3,6 +3,7 @@ import {
   PERIODIC_RESOLVE_LIMIT,
   RESOLVE_CLAIM_BACKOFF_BASE_MS,
   RESOLVE_CLAIM_BACKOFF_CAP_MS,
+  attemptParksResolve,
   attemptsFromResolveJob,
   claimsReadyToResolve,
   decidePeriodicResolve,
@@ -61,7 +62,7 @@ describe("resolve claim backoff", () => {
       }),
     ).toEqual([
       { claimId: "ok", finishedAt, failed: false },
-      { claimId: "bad", finishedAt, failed: true },
+      { claimId: "bad", finishedAt, failed: true, error: "relayer timeout" },
     ]);
     expect(attemptsFromResolveJob({ finishedAt: null, result: { reports: [], errors: [] } })).toEqual([]);
   });
@@ -102,6 +103,19 @@ describe("periodic resolve decision", () => {
     expect(decision.claimIds).toHaveLength(PERIODIC_RESOLVE_LIMIT);
     expect(decision.claimIds[0]).toBe("ready");
     expect(decision.claimIds).not.toContain("cooling");
+  });
+
+  it("does not retry an idempotency conflict on the periodic pass", () => {
+    const message =
+      "resolution:b3cfb240 was already used with different content, and recall could not read the stored memory. Claim left pending.";
+    expect(attemptParksResolve(message)).toBe(true);
+    expect(attemptParksResolve("relayer timeout")).toBe(false);
+    const finishedAt = new Date(NOW.getTime() - RESOLVE_CLAIM_BACKOFF_CAP_MS - 1);
+    const attempts = [{ claimId: "stuck", finishedAt, failed: true, error: message }];
+    expect(claimsReadyToResolve(["stuck", "other"], attempts, NOW)).toEqual(["other"]);
+    expect(
+      decidePeriodicResolve({ enabled: true, openJob: false, dueIds: ["stuck"], attempts, now: NOW }),
+    ).toEqual({ action: "skip", reason: "parked" });
   });
 
   it("reports backoff when every due claim is still waiting", () => {

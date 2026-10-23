@@ -3,9 +3,11 @@
  *
  * The feed is a ranked, capped list of claims. The overview needs every source,
  * and the totals need every claim plus the memory log. Both are derived here
- * from rows the API already stores. Walrus is not queried: a memory count from
- * this projection is inventory. `verified` is set only when the newest finished
- * rebuild job reported a complete list walk.
+ * from rows the API already stores. Walrus is not queried. `inventory` is the
+ * number of rows in Postgres `memory_log`. It is not the relayer's live list
+ * (`npm run list:memories` counts that, including blobs never logged here).
+ * `verified` is set only when the newest finished rebuild job reported a
+ * complete list walk.
  */
 import { MIN_SAMPLE, sourceIsMuted, trustBand, type TrustBand } from "./score";
 
@@ -53,7 +55,10 @@ export interface LedgerSource {
 }
 
 export interface LedgerMemories {
-  /** Rows in the projection's memory log. This is what the Memory page lists. */
+  /**
+   * Rows in Postgres `memory_log`. The homepage labels this "logged".
+   * It is not the relayer live count.
+   */
   inventory: number;
   /**
    * Product memories read from a completed Walrus list walk.

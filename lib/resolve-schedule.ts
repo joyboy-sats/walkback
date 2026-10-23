@@ -24,6 +24,18 @@ export interface ResolveAttemptRecord {
   claimId: string;
   finishedAt: Date;
   failed: boolean;
+  /** Present on a failed attempt. An idempotency conflict parks the claim. */
+  error?: string;
+}
+
+/**
+ * The relayer already accepted this key with different bytes. Trying again
+ * on the 60s pass sends the same 409. The claim stays out of the periodic
+ * queue; a seed or a manual resolve can still repair it.
+ */
+export function attemptParksResolve(error: string | undefined): boolean {
+  if (!error) return false;
+  return /already used with different content/i.test(error) || /idempotency_key was already used/i.test(error);
 }
 
 /**
@@ -58,6 +70,7 @@ export function claimsReadyToResolve(
   const ready: string[] = [];
   for (const id of dueIds) {
     const history = byClaim.get(id) ?? [];
+    if (history[0]?.failed && attemptParksResolve(history[0].error)) continue;
     let failures = 0;
     let lastFailure: Date | null = null;
     for (const attempt of history) {
@@ -89,9 +102,17 @@ export function attemptsFromResolveJob(job: {
     }
   }
   if (Array.isArray(body.errors)) {
-    for (const error of body.errors) {
-      const claimId = claimIdOf(error);
-      if (claimId) out.push({ claimId, finishedAt: job.finishedAt, failed: true });
+    for (const entry of body.errors) {
+      const claimId = claimIdOf(entry);
+      if (claimId) {
+        const message = (entry as { error?: unknown }).error;
+        out.push({
+          claimId,
+          finishedAt: job.finishedAt,
+          failed: true,
+          ...(typeof message === "string" && message.length > 0 ? { error: message } : {}),
+        });
+      }
     }
   }
   return out;
@@ -136,7 +157,7 @@ export function planResolveJob(payload: Record<string, unknown>): ResolvePlan {
 }
 
 export type PeriodicResolveDecision =
-  | { action: "skip"; reason: "disabled" | "open" | "idle" | "backoff" }
+  | { action: "skip"; reason: "disabled" | "open" | "idle" | "backoff" | "parked" }
   | { action: "enqueue"; claimIds: string[] };
 
 export function decidePeriodicResolve(input: {
@@ -151,7 +172,14 @@ export function decidePeriodicResolve(input: {
   if (input.openJob) return { action: "skip", reason: "open" };
   const ready = claimsReadyToResolve(input.dueIds, input.attempts, input.now);
   if (ready.length === 0) {
-    return { action: "skip", reason: input.dueIds.length === 0 ? "idle" : "backoff" };
+    if (input.dueIds.length === 0) return { action: "skip", reason: "idle" };
+    const parked = input.dueIds.every((id) => {
+      const history = input.attempts
+        .filter((attempt) => attempt.claimId === id)
+        .sort((a, b) => b.finishedAt.getTime() - a.finishedAt.getTime());
+      return Boolean(history[0]?.failed && attemptParksResolve(history[0].error));
+    });
+    return { action: "skip", reason: parked ? "parked" : "backoff" };
   }
   const limit = input.limit ?? PERIODIC_RESOLVE_LIMIT;
   return { action: "enqueue", claimIds: ready.slice(0, limit) };

@@ -10,8 +10,24 @@ import type { ClaimedJob } from "../lib/job-queue";
 import { restoreNamespace } from "../lib/memwal";
 import { rebuildProjection } from "../lib/projection-rebuild";
 import { planResolveJob } from "../lib/resolve-schedule";
-import { resolveClaim, resolveClaimsById, resolveDueClaims } from "../lib/resolve";
+import { resolveClaim, resolveClaimsById, resolveDueClaims, type ResolveHooks } from "../lib/resolve";
+import { formatResolveLine } from "../lib/stored-resolution";
 import { NS, type Namespace } from "../lib/types";
+
+function resolveHooks(): ResolveHooks {
+  return {
+    onClaimLoaded(claim) {
+      const ext = claim.externalId ? ` ${claim.externalId}` : "";
+      console.log(`[resolve] ${claim.handle} ${claim.claimId}${ext}`);
+    },
+    onClaimDone(report, elapsedMs) {
+      console.log(`[resolve] ${formatResolveLine(report)} ${elapsedMs}ms`);
+    },
+    onClaimError(claimId, error, elapsedMs) {
+      console.error(`[resolve] failed ${claimId} ${elapsedMs}ms: ${error}`);
+    },
+  };
+}
 
 export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
   switch (job.kind) {
@@ -40,18 +56,23 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
     case "resolve": {
       const plan = planResolveJob(job.payload);
       if (plan.type === "one") {
-        return resolveClaim(plan.claimId, new Date(), {
-          supersede: plan.supersede,
-          force: plan.force,
-        });
+        return resolveClaim(
+          plan.claimId,
+          new Date(),
+          {
+            supersede: plan.supersede,
+            force: plan.force,
+          },
+          resolveHooks(),
+        );
       }
       if (plan.type === "ids") {
-        return resolveClaimsById(plan.claimIds, new Date(), undefined, {
+        return resolveClaimsById(plan.claimIds, new Date(), resolveHooks(), {
           supersede: plan.supersede,
           force: plan.force,
         });
       }
-      return resolveDueClaims(new Date(), plan.limit);
+      return resolveDueClaims(new Date(), plan.limit, resolveHooks());
     }
     case "restore": {
       const payload = job.payload as { namespace?: Namespace; limit?: number };

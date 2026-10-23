@@ -377,13 +377,19 @@ export interface OhlcvCreditEstimate {
  * boundary hour to minutes. `at_deadline` is one single candle. The six
  * claims whose deadlines are still ahead are not included.
  */
-export function estimateSeedOhlcv(posts: readonly SeedPost[], now: Date): OhlcvCreditEstimate {
+export function estimateSeedOhlcv(
+  posts: readonly SeedPost[],
+  now: Date,
+  opts?: { resolvedExternalIds?: ReadonlySet<string> },
+): OhlcvCreditEstimate {
   let claims = 0;
   let batchCalls = 0;
   let worstBatchCalls = 0;
   let singleCalls = 0;
   for (const post of posts) {
-    for (const claim of post.claims ?? []) {
+    for (let index = 0; index < (post.claims?.length ?? 0); index++) {
+      const claim = post.claims![index]!;
+      if (opts?.resolvedExternalIds?.has(claimExternalId(post.id, index))) continue;
       if (claim.claim_type !== "price_threshold") continue;
       if (Date.parse(claim.deadline) > now.getTime()) continue;
       claims += 1;
@@ -454,11 +460,10 @@ export function formatSeedSummary(s: SeedSummaryInput): string {
   if (s.ohlcvEstimate) {
     const estimate = s.ohlcvEstimate;
     lines.push(
-      `tatum      estimate ${estimate.claims} past-deadline price claim(s): ` +
+      `tatum      estimate ${estimate.claims} still-pending past-deadline price claim(s): ` +
         `expected ${estimate.credits} credits ` +
         `(${estimate.batchCalls} daily batch at ${OHLCV_BATCH_CREDITS}, ` +
-        `${estimate.singleCalls} single at ${OHLCV_SINGLE_CREDITS}) ` +
-        `if each is still unresolved. ` +
+        `${estimate.singleCalls} single at ${OHLCV_SINGLE_CREDITS}). ` +
         `Worst case, if every boundary day and hour is refined, ${estimate.worstCredits} credits. ` +
         `Budget remaining about 99000.`,
     );

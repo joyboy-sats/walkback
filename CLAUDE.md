@@ -34,8 +34,12 @@ Hackathon: Walrus x Tatum "Total Recall". Deadline 2026-11-10 17:00 UTC
   (**6.1s/item**). Measured on mainnet — see `scripts/timing.ts`. Consequence:
   **never write memories synchronously inside a request a user is waiting on.**
   Use bulk, or a background job, or a pre-seeded demo dataset.
-- Delegate keys are limited to **30 points/minute** per key. All writes go
-  through `memwalWriteLimiter` in `lib/ratelimit.ts` (set to 25/min).
+- Delegate keys are limited to **60 weighted requests/minute**. Status polls
+  count. Each write charges 6 (one accept plus a 5s poll over a ~24s write).
+  `memwalWriteLimiter` is process-local. The seed and the worker share one
+  window in Postgres (`memwal_write_budget`, `lib/write-budget.ts`) and take
+  turns inside `rememberAndWait` (`withMemwalWriteLock`). A 429 waits at least
+  60s (`retry_after_seconds` when that is longer).
 - `remember` is **append-only**. No upsert, no update, no delete. `forget()` and
   `clear()` exist only on `MemWalMock`, not the real class. Do not build a
   delete UI. Logical deletion = append a tombstone memory + filter in the
