@@ -4,8 +4,10 @@ import { claimMemory } from "./memory-text";
 import { exclusionVerdict } from "./scoring-exclusion";
 import {
   chunk,
+  DEFAULT_SEED_OHLCV_CREDIT_CAP,
   estimateSeedOhlcv,
   formatSeedSummary,
+  seedOhlcvCreditCap,
   isSynthetic,
   materializeClaims,
   parseClaimsFile,
@@ -164,11 +166,12 @@ describe("data/claims.json", () => {
     const estimate = estimateSeedOhlcv(file.posts, new Date("2026-10-23T00:00:00.000Z"));
     expect(estimate.claims).toBe(16);
     expect(estimate.singleCalls).toBe(0);
-    expect(estimate.batchCalls).toBe(124);
-    expect(estimate.credits).toBe(62_000);
-    expect(estimate.refinementCapCredits).toBe(16 * 2000);
-    expect(estimate.credits).toBeLessThan(99_000);
-    expect(estimate.credits + estimate.refinementCapCredits).toBeLessThan(99_000);
+    expect(estimate.batchCalls).toBe(16);
+    expect(estimate.credits).toBe(8_000);
+    expect(estimate.worstBatchCalls).toBe(98);
+    expect(estimate.worstCredits).toBe(49_000);
+    expect(estimate.credits).toBeLessThan(20_000);
+    expect(estimate.worstCredits).toBeLessThan(99_000);
   });
 
   it("omits the replay whose quote names a different address than the one stored", () => {
@@ -289,6 +292,17 @@ describe("chunk", () => {
     expect(batches.map((b) => b.length)).toEqual([20, 20, 5]);
     expect(batches.every((b) => b.length <= 20)).toBe(true);
     expect(() => chunk([1], 21)).toThrow(/20/);
+  });
+});
+
+describe("seedOhlcvCreditCap", () => {
+  it("defaults to 20000 and rejects a value that is not a non-negative integer", () => {
+    expect(DEFAULT_SEED_OHLCV_CREDIT_CAP).toBe(20_000);
+    expect(seedOhlcvCreditCap(undefined)).toBe(20_000);
+    expect(seedOhlcvCreditCap(" 15000 ")).toBe(15_000);
+    expect(seedOhlcvCreditCap(undefined, 0)).toBe(0);
+    expect(() => seedOhlcvCreditCap("20k")).toThrow(/SEED_OHLCV_CREDIT_CAP/);
+    expect(() => seedOhlcvCreditCap(undefined, -1)).toThrow(/non-negative/);
   });
 });
 

@@ -1,38 +1,36 @@
 /**
- * Cover a price window with Tatum OHLCV candles.
+ * Cover a price window with Tatum OHLCV candles, coarse to fine.
  *
- * Hourly candles are preferred. Daily candles are used only when hourly
- * cannot be requested: the window would exceed the hourly call budget, the
- * hourly interval is rejected, or hourly returns nothing. A hole inside an
- * hourly series is a void, not a reason to switch to a coarser bucket — a
- * daily high would paper over the missing hour.
+ * The first read is daily. A daily candle whose whole bucket sits inside
+ * [from, to) can establish a touch: its high or low printed in the window,
+ * compared to the target without rounding. If every overlapping daily
+ * candle's high (a rise) or low (a fall) is short of the target, that
+ * already proves a miss, including a boundary day whose extreme never
+ * reached the target. No hourly candles are requested.
  *
- * A touch is strict about the window. A candle whose whole bucket sits inside
- * [from, to) can establish one: its high or low printed in the window, and
- * that decimal is compared to the target without rounding. A candle that
- * overlaps the window but sticks out past `from` or `to` can only refute a
- * touch. Its high and low bound the overlap, and the extreme may have printed
- * outside. When the verdict depends on that partial bucket, or the edge is
- * missing, the overlap is re-read at a finer interval (one minute for an
- * hour, one hour for a day). If the finer series still cannot place the
- * extreme inside the window, or does not cover the slice, the claim is void.
+ * A daily candle that overlaps the window but sticks out past `from` or `to`
+ * can only refute. When its extreme reaches the target, or the edge of the
+ * window is missing, only that day is re-read hourly. A boundary hour is
+ * re-read at one minute the same way. If the finer series still cannot place
+ * the extreme inside the window, or does not cover the slice, the claim is
+ * void. A hole larger than one bucket stays void: a coarser high is not used
+ * to paper over it.
  *
- * The read starts one interval before `from` so the opening hour is present
+ * The read starts one interval before `from` so the opening bucket is present
  * to act as a bound. A candle that merely opens at `to` is not kept: its
  * range is after the deadline.
  */
 import {
   DAILY_PAGE_BUDGET,
-  HOURLY_PAGE_BUDGET,
   INTERVAL_MS,
   OHLCV_PAGE_SIZE,
+  REFINEMENT_BATCH_CAP,
   TATUM_OHLCV_SOURCE,
   candleEndExclusiveMs,
   candleHighText,
   candleLowText,
   priceMeets,
   spanMatchesInterval,
-  touchIntervalFor,
   windowExtremes,
   type PriceCandle,
   type PriceExtreme,
@@ -149,36 +147,7 @@ export async function loadTouchWindow(
     window: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
   };
 
-  const preferDaily = touchIntervalFor(fromMs, toMs) === "1d";
-  if (!preferDaily) {
-    const hourly = await readInterval(source, input.symbol, fromMs, toMs, "1h", HOURLY_PAGE_BUDGET);
-    if (hourly.kind === "unsupported") return unsupported(input.symbol, base);
-    if (hourly.kind === "mismatch") return mismatch(input.symbol, hourly.symbol, base);
-    if (hourly.kind === "candles" && hourly.candles.length > 0) {
-      return finishTouch(source, input, "1h", hourly.candles, hourly.requests, fromMs, toMs);
-    }
-    if (hourly.kind === "budget") {
-      return fail(
-        `Tatum ${input.symbol}/USD hourly history was not fully read, so the claim was not checked.`,
-        { ...base, interval: "1h" },
-      );
-    }
-    const why =
-      hourly.kind === "rejected"
-        ? "hourly request was rejected"
-        : "hourly returned no candles";
-    const daily = await readDaily(source, input, fromMs, toMs, base, why);
-    return daily;
-  }
-
-  return readDaily(
-    source,
-    input,
-    fromMs,
-    toMs,
-    base,
-    "window is longer than the hourly request budget",
-  );
+  return readDaily(source, input, fromMs, toMs, base);
 }
 
 export async function loadDeadlinePrice(
@@ -254,30 +223,29 @@ async function readDaily(
   fromMs: number,
   toMs: number,
   base: Record<string, unknown>,
-  intervalFallback: string,
 ): Promise<TouchLoad> {
   const daily = await readInterval(source, input.symbol, fromMs, toMs, "1d", DAILY_PAGE_BUDGET);
   if (daily.kind === "unsupported") return unsupported(input.symbol, base);
   if (daily.kind === "mismatch") return mismatch(input.symbol, daily.symbol, base);
   if (daily.kind === "rejected") {
     return fail(
-      `Tatum rejected the ${input.symbol}/USD price history request, so the claim was not checked.`,
-      { ...base, intervalFallback },
+      `Tatum rejected the ${input.symbol}/USD daily price history request, so the claim was not checked.`,
+      { ...base, interval: "1d" },
     );
   }
   if (daily.kind === "budget") {
     return fail(
       `Tatum ${input.symbol}/USD daily history was not fully read, so the claim was not checked.`,
-      { ...base, interval: "1d", intervalFallback },
+      { ...base, interval: "1d" },
     );
   }
   if (daily.candles.length === 0) {
     return fail(
       `Tatum returned no ${input.symbol}/USD candles for the window, so the claim was not checked.`,
-      { ...base, intervalFallback },
+      { ...base, interval: "1d" },
     );
   }
-  return finishTouch(source, input, "1d", daily.candles, daily.requests, fromMs, toMs, intervalFallback);
+  return finishTouch(source, input, "1d", daily.candles, daily.requests, fromMs, toMs);
 }
 
 async function finishTouch(
@@ -359,7 +327,7 @@ async function finishTouch(
   return {
     ok: true,
     source: TATUM_OHLCV_SOURCE,
-    interval,
+    interval: intervalOfExtreme(judgment.extreme, interval),
     ...(intervalFallback ? { intervalFallback } : {}),
     candles: covered.candles,
     boundary: covered.boundary,
@@ -586,6 +554,16 @@ export function judgeWindowTouch(
   };
 }
 
+/** The bucket that printed `extreme`, so a refined minute is not described as a daily high. */
+function intervalOfExtreme(extreme: PriceExtreme, fallback: PriceInterval): PriceInterval {
+  const span = Date.parse(extreme.candleClose) - Date.parse(extreme.at);
+  for (const key of ["1m", "1h", "1d"] as const) {
+    const step = INTERVAL_MS[key];
+    if (span === step || span === step - 1) return key;
+  }
+  return fallback;
+}
+
 function finerThan(interval: PriceInterval): PriceInterval | null {
   if (interval === "1d") return "1h";
   if (interval === "1h") return "1m";
@@ -593,7 +571,11 @@ function finerThan(interval: PriceInterval): PriceInterval | null {
 }
 
 /** Calls allowed while settling one partial bucket. One hour is two minute pages; one day is one hourly page. */
-const REFINEMENT_CALLS: Record<PriceInterval, number> = { "1m": 1, "1h": 3, "1d": 2 };
+const REFINEMENT_CALLS: Record<PriceInterval, number> = {
+  "1m": REFINEMENT_BATCH_CAP["1m"],
+  "1h": REFINEMENT_BATCH_CAP["1h"],
+  "1d": 1,
+};
 
 async function refineSlices(
   source: PriceHistorySource,

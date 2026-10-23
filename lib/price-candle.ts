@@ -11,9 +11,10 @@
 import type { Direction, PriceEvaluation, PriceThresholdParams } from "./types";
 
 /**
- * Hourly is the preferred bucket. Daily is the fallback when hourly cannot
- * cover the window. One-minute candles are used only to settle an hour that
- * straddles the window; they are not a third way to check the whole claim.
+ * A touch starts with daily candles. Hourly candles are read only for a
+ * boundary day whose extreme reaches the target or whose coverage is missing.
+ * One-minute candles settle a boundary hour the same way. They are not a
+ * second pass over the whole window.
  */
 export const PRICE_INTERVALS = ["1m", "1h", "1d"] as const;
 export type PriceInterval = (typeof PRICE_INTERVALS)[number];
@@ -33,12 +34,11 @@ export const DAILY_PAGE_BUDGET = 12;
 export const OHLCV_SINGLE_CREDITS = 50;
 export const OHLCV_BATCH_CREDITS = 500;
 /**
- * A touch claim has at most two partial hours (the publish hour and the
- * deadline hour). Each partial hour is at most two one-minute batch calls.
- * Those calls happen only when that hour's high or low reaches the target,
- * or when the hour itself was not loaded.
+ * Batch calls allowed while refining one partial bucket.
+ * A boundary day is at most 24 hourly candles, one page, with one spare.
+ * A boundary hour is at most 60 minute candles, two pages.
  */
-export const BOUNDARY_REFINEMENT_CREDIT_CAP = 2 * 2 * OHLCV_BATCH_CREDITS;
+export const REFINEMENT_BATCH_CAP = { "1h": 2, "1m": 2 } as const;
 
 export const TATUM_OHLCV_SOURCE = "tatum:/v4/data/rate/symbol/OHLCV";
 
@@ -88,9 +88,48 @@ export function denseBatchCalls(fromMs: number, toMs: number, interval: PriceInt
   return calls;
 }
 
-/** Hourly when the dense call count fits the budget; otherwise daily. */
-export function touchIntervalFor(fromMs: number, toMs: number): "1h" | "1d" {
-  return denseBatchCalls(fromMs, toMs, "1h") > HOURLY_PAGE_BUDGET ? "1d" : "1h";
+/**
+ * The partial bucket at each end of [fromMs, toMs), when that end is not on
+ * an interval boundary. A window that sits inside one bucket is one slice.
+ */
+export function boundarySlices(
+  fromMs: number,
+  toMs: number,
+  interval: PriceInterval,
+): Array<{ fromMs: number; toMs: number }> {
+  const step = INTERVAL_MS[interval];
+  if (!(toMs > fromMs) || step <= 0) return [];
+  const slices: Array<{ fromMs: number; toMs: number }> = [];
+  if (fromMs % step !== 0) {
+    const bucketEnd = fromMs - (fromMs % step) + step;
+    const sliceTo = Math.min(toMs, bucketEnd);
+    if (sliceTo > fromMs) slices.push({ fromMs, toMs: sliceTo });
+  }
+  if (toMs % step !== 0) {
+    const bucketStart = toMs - (toMs % step);
+    const sliceFrom = Math.max(fromMs, bucketStart);
+    const duplicate = slices.some((slice) => slice.fromMs === sliceFrom && slice.toMs === toMs);
+    if (!duplicate && toMs > sliceFrom) slices.push({ fromMs: sliceFrom, toMs });
+  }
+  return slices;
+}
+
+/**
+ * Credits for one touch window. Expected is the daily read: one 50-candle
+ * batch covers a window of about seven weeks. Worst case also refines each
+ * boundary day to hours and each boundary hour to minutes, which happens
+ * only when that partial extreme reaches the target or the edge is missing.
+ */
+export function touchCreditPlan(fromMs: number, toMs: number): { expectedBatches: number; worstBatches: number } {
+  const expectedBatches = denseBatchCalls(fromMs, toMs, "1d");
+  let worstBatches = expectedBatches;
+  for (const day of boundarySlices(fromMs, toMs, "1d")) {
+    worstBatches += Math.min(REFINEMENT_BATCH_CAP["1h"], denseBatchCalls(day.fromMs, day.toMs, "1h"));
+    for (const hour of boundarySlices(day.fromMs, day.toMs, "1h")) {
+      worstBatches += Math.min(REFINEMENT_BATCH_CAP["1m"], denseBatchCalls(hour.fromMs, hour.toMs, "1m"));
+    }
+  }
+  return { expectedBatches, worstBatches };
 }
 
 const usage = { singles: 0, batches: 0 };

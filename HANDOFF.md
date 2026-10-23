@@ -24,12 +24,12 @@ remains is mostly surface area, seed data, and the submission artefacts.
 
 - `price_threshold` is judged from Tatum historical USD candles
   (`/v4/data/rate/symbol/OHLCV` and the batch route), not the spot rate.
-  Hourly first, daily when hourly cannot be requested. A partial boundary
-  candle cannot by itself establish a touch; the slice is re-read finer, and
-  an extreme that still cannot be placed inside the window is `void`. An
-  unsupported symbol or a gap is also `void`. A checkable miss is `false`.
-  Sixteen historical touches are already due. Six earlier ones stay pending
-  until 2026-10-30 and 2026-11-08.
+  A touch starts with daily candles. A partial boundary candle cannot by
+  itself establish a touch; that day is re-read hourly, then a boundary hour
+  at one minute, and an extreme that still cannot be placed inside the window
+  is `void`. An unsupported symbol or a gap is also `void`. A checkable miss
+  is `false`. Sixteen historical touches are already due. Six earlier ones
+  stay pending until 2026-10-30 and 2026-11-08.
 - `AI_GATEWAY_API_KEY` is unset, so extraction has never run.
 - `DATABASE_URL` is unset, so the projection has never been created.
 - `MEMWAL_AGENT_ID` is assumed to be the delegate public key. Unconfirmed.
@@ -121,6 +121,10 @@ The candidate file had no third admissible `@suintern_` claim.
   uses the 7-day benchmark; a technical-analysis post with no date uses the
   14-day benchmark. The same phrase is used for every post in that class.
   See README Methodology. A miss stays `false`. Missing coverage is `void`.
+  The log's expected Tatum cost for these 16, if they are still unresolved,
+  is 16 daily batch calls (8,000 credits). Worst case, refining every
+  boundary day and hour, is 49,000. `SEED_OHLCV_CREDIT_CAP` (default 20000)
+  aborts resolve before any Tatum call when the expected cost is higher.
 - `@mysqlsui` and both `balance_threshold` claims are omitted.
 - Each post keeps `source_url`. The feed links to it.
 
@@ -128,11 +132,9 @@ A rerun skips every post whose `seed_posts.applied_at` marker is set, so the
 original 17 are not inserted again and are not written to Walrus again. Only
 the new posts are ingested. Resolve checks a claim only while it is still
 pending and past its deadline. Already-resolved replay claims are not checked
-again. The log prints a Tatum estimate before resolve: 124 hourly batch calls
-(62,000 credits) for these 16 if they are still unresolved, plus at most
-32,000 credits of one-minute boundary refinement, and only for a partial
-candle that could decide the touch. After resolve it prints the credits this
-run actually spent. A second run of an already-seeded file observes 0.
+again. The log prints the expected cost and the worst case before resolve.
+After resolve it prints the credits this run actually spent. A second run of
+an already-seeded file observes 0.
 
 Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not

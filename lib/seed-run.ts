@@ -25,6 +25,7 @@ import {
   isSynthetic,
   materializeClaims,
   parseClaimsFile,
+  seedOhlcvCreditCap,
   type SeedSummaryInput,
 } from "./seed-plan";
 
@@ -44,6 +45,8 @@ export interface SeedRunOptions {
   log?: (line: string) => void;
   now?: Date;
   resolveLimit?: number;
+  /** Overrides `SEED_OHLCV_CREDIT_CAP`. The seed does not call Tatum above this. */
+  ohlcvCreditCap?: number;
 }
 
 export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promise<SeedRunResult> {
@@ -56,6 +59,7 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
   });
 
   const file = parseClaimsFile(raw);
+  const creditCap = seedOhlcvCreditCap(process.env.SEED_OHLCV_CREDIT_CAP, options.ohlcvCreditCap);
   resetOhlcvCreditUsage();
   let postsSeeded = 0;
   let postsSkipped = 0;
@@ -137,18 +141,25 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
   const ohlcvEstimate = estimateSeedOhlcv(file.posts, now);
   log(
     `[seed] tatum OHLCV estimate: ${ohlcvEstimate.claims} past-deadline price claim(s), ` +
-      `${ohlcvEstimate.batchCalls} batch calls + ${ohlcvEstimate.singleCalls} single calls = ` +
-      `${ohlcvEstimate.credits} credits if each is still unresolved. ` +
-      `Boundary refinement adds at most ${ohlcvEstimate.refinementCapCredits} credits, ` +
-      `and only when a partial candle could decide the touch. Budget remaining about 99000. ` +
-      `Already-resolved claims are not checked again.`,
+      `expected ${ohlcvEstimate.credits} credits ` +
+      `(${ohlcvEstimate.batchCalls} daily batch + ${ohlcvEstimate.singleCalls} single) ` +
+      `if each is still unresolved. ` +
+      `Worst case ${ohlcvEstimate.worstCredits} credits if every boundary day and hour is refined. ` +
+      `Cap ${creditCap}. Already-resolved claims are not checked again.`,
   );
   const resolveLimit = options.resolveLimit ?? 200;
   let resolveErrors: Array<{ claimId: string; error: string }> = [];
+  const overCap = ohlcvEstimate.credits > creditCap;
 
   if (stopForTimeout) {
     failures.push({ step: "resolve", error: "skipped after a timed-out write" });
     log("[seed] resolve phase skipped after a timed-out write");
+  } else if (overCap) {
+    const message =
+      `Tatum OHLCV estimate ${ohlcvEstimate.credits} credits exceeds SEED_OHLCV_CREDIT_CAP ${creditCap}; ` +
+      `resolve was not started`;
+    failures.push({ step: "resolve", error: message });
+    log(`[seed] aborting before Tatum: ${message}`);
   } else {
     log("[seed] resolve phase");
     try {
