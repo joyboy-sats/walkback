@@ -22,8 +22,9 @@ These are different Tatum products. A verdict names which one it used.
 **Tatum Data API** supplies historical prices. A `price_threshold` claim is
 checked against USD OHLCV candles (`GET /v4/data/rate/symbol/OHLCV`, and the
 batch route when many candles are needed). The spot rate
-(`/v4/data/rate/symbol`) is not a verdict. A candle that does not cover the
-claim's window resolves `void`.
+(`/v4/data/rate/symbol`) is not a verdict. How a touch is read, including
+boundary candles and the deadline conventions, is in
+[Methodology](#methodology).
 
 **Tatum Sui RPC** (`https://sui-mainnet.gateway.tatum.io`) supplies chain
 reads. `tx_replay` uses `suix_queryTransactionBlocks` with
@@ -58,7 +59,11 @@ Walkback audits public claims against onchain data. A low score means the claims
 
 Walkback scores only claims it can check. The closed set is `balance_threshold` (current balance via `suix_getBalance`), `balance_change_since_ingest` (the snapshot taken at ingest, compared with the balance at the deadline), `tx_replay` (`suix_queryTransactionBlocks` with `showBalanceChanges`), `price_threshold` (Tatum historical USD candles over the claim's window), and `manual` (a human verdict, used as a demo fallback). Anything outside that set is rejected before it is stored.
 
-A verdict is `true` or `false` when that check decides the claim. `void` means the claim could not be verified: the deadline has not passed, there was no snapshot, the address is a placeholder, the candle series does not cover the pair or the window, the replay window was truncated or a transfer could not be read, or the check failed. A void is not a lie. It does not count as a hit or a miss, and it does not move the score.
+A verdict is `true` or `false` when that check decides the claim. `void` means the claim could not be verified: the deadline has not passed, there was no snapshot, the address is a placeholder, the candle series does not cover the pair or the window, a boundary candle cannot place the extreme inside the window, the replay window was truncated or a transfer could not be read, or the check failed. A void is not a lie. It does not count as a hit or a miss, and it does not move the score. A claim that was checkable and missed its target is `false`. It stays in the ledger. The outcome is not a reason to drop or rewrite it.
+
+A price touch starts with daily USD candles over `[published_at, deadline)`. A daily candle whose whole bucket sits inside that window can establish the touch. The comparison uses the candle's unrounded decimal. If every overlapping daily candle's high (for a rise) or low (for a fall) is short of the target, the claim is false and no finer candles are read. A daily candle that overlaps the window but is not fully inside it can only bound the overlap: its high or low may have printed outside. When that partial extreme reaches the target, or the edge of the window is missing, only that day is re-read hourly, and a boundary hour is re-read at one minute if it still cannot be placed. If the finer series still cannot place the extreme inside the window, or does not cover the slice, the claim is `void`. The evidence records the deciding candle or candles, whether each one established the touch or only bounded it, and the window high and low.
+
+When the post names a horizon, that horizon is the deadline, in UTC, and `deadline_basis` says the post stated it. Weeks run Monday through Sunday. "This week" ends that Sunday at 23:59:59.000Z. "Next week" ends the following Sunday. "This week or next week" ends the Sunday after next. "This month" and "by the end of {Month}" end on that month's last day at 23:59:59.000Z. A trade setup that states no date uses a benchmark of exactly 7 days after `published_at`. A technical-analysis post that states no date uses a benchmark of exactly 14 days. Every post in a class uses the same `deadline_basis` phrase, and the phrase says it is a benchmark convention. The six price claims collected on 2026-10-20 keep the deadlines chosen then (2026-10-30 and 2026-11-08). They were not moved onto the 7-day or 14-day benchmark.
 
 The number is the lower bound of a 95% Wilson score interval over hits and misses. It is not a raw hit rate and not a model call. One correct guess is not evidence: 1 hit out of 1 claim is about 0.21, and 8 out of 10 is about 0.49.
 
@@ -167,10 +172,20 @@ From the **Tatum dashboard**: `TATUM_API_KEY` and the Sui RPC gateway URL.
 
 `npm run seed` reads `data/claims.json` and runs each post through the same
 ingest path as the app. That file is the
-[retrospective benchmark](#retrospective-benchmark): the real set, 17 posts, 17
-claims, 7 handles. Eleven are `tx_replay` posts from `@_OnChainWatch`. Six are
-`price_threshold` posts, all `SUI` against `USD`. None are marked synthetic.
-`@mysqlsui` and both `balance_threshold` claims were left out on purpose.
+[retrospective benchmark](#retrospective-benchmark): the real set, 30 posts, 33
+claims, 10 handles. Eleven are `tx_replay` posts from `@_OnChainWatch`.
+Twenty-two are `price_threshold` claims, all `evaluation: touch` against
+`USD`. Six of those, all `SUI`, were collected on 2026-10-20 and stay pending
+until 2026-10-30 or 2026-11-08. Sixteen are historical and already past their
+deadline: four from `@Community_Sui`, three from `@mrcamerontrader`, three
+from `@cryptowithgopal` (including both borderline calls), four from one
+`@Sophia_WebX` post (`SUI`, `SOL`, `ETH`, `BTC`), and two from `@suintern_`.
+The candidate file had no third admissible `@suintern_` claim, so that source
+stays under three verdicts. Backup accounts were not added. None of the posts
+are marked synthetic. `@mysqlsui` and both `balance_threshold` claims were
+left out on purpose. Four historical claims the collector scored below 0.6
+are stored at the 0.6 floor; the targets and windows are the ones in the
+posts.
 Each post has `source_url`, the permalink of the original X post. The feed
 and the source page link there when the URL is `https`.
 
@@ -216,8 +231,17 @@ npm run seed
 npm run list:memories
 ```
 
-`TATUM_API_KEY` is required: the eleven replay deadlines are already past, so
-the seed resolves them. `AI_GATEWAY_API_KEY` is not, because every post
+`TATUM_API_KEY` is required: the eleven replay deadlines and the sixteen
+historical price deadlines are already past, so the seed resolves them. A
+post whose applied marker is set is skipped, and a claim that already has a
+resolution is not checked again. Before resolve, the log estimates the OHLCV
+cost of every still-unresolved past-deadline price claim. For this file the
+expected cost is 16 daily batch calls, 8,000 credits, if all sixteen are
+still pending. Worst case, if every boundary day and hour has to be refined,
+is 49,000 credits. The seed does not call Tatum when the expected cost is
+above `SEED_OHLCV_CREDIT_CAP` (default 20,000). After resolve the log prints
+the credits this run actually spent. A second run of an already-resolved
+file spends none. `AI_GATEWAY_API_KEY` is not required, because every post
 already has `claims`. The summary prints memory counts per namespace, every
 blob id, and the score of each source. `list:memories` prints the whole
 delegate account, not only this run. The worker image includes `scripts/`,
@@ -347,6 +371,7 @@ The API does not need the Walrus or Tatum keys.
 | `DEMO_MODE` | `live` |
 | `WORKER_POLL_MS` | Optional. Default `2000`. |
 | `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. The pass enqueues only when a claim is pending and past its deadline, and it waits longer after a claim's resolve keeps throwing. |
+| `SEED_OHLCV_CREDIT_CAP` | Optional. Default `20000`. `npm run seed` skips resolve, and does not call Tatum, when the expected daily-candle cost of past-deadline price claims is above this. |
 
 Seed is a one-off in the worker container's terminal, after the image is deployed: `npm run seed`, then `npm run list:memories`. The worker image includes `scripts/`, `data/claims.json`, and `tsx`.
 
@@ -354,13 +379,13 @@ Seed is a one-off in the worker container's terminal, after the image is deploye
 
 - `price_threshold` is judged from Tatum historical USD candles
   (`/v4/data/rate/symbol/OHLCV`), not from the spot rate at the moment the
-  worker runs. A touch uses the hourly high or low over `[published_at, deadline]`
-  (daily candles only when hourly cannot be requested). A deadline claim uses
-  the hourly candle that contains the deadline. A missing symbol, a non-USD
-  quote, or a gap in the series is `void` and does not move the score. The
-  six seeded price claims are all touches, still pending until 2026-10-30 and
-  2026-11-08. `deadline_basis` records why that deadline was chosen; the
-  resolver does not invent one.
+  worker runs. A touch starts with daily candles. The window rule, the
+  unrounded comparison, and the deadline convention are in Methodology. A
+  missing symbol, a non-USD quote, a gap, or a boundary candle that cannot
+  place the extreme inside the window is `void` and does not move the score.
+  A checkable miss is `false`. Sixteen historical touches are already due.
+  The six collected on 2026-10-20 stay pending until 2026-10-30 and
+  2026-11-08. `deadline_basis` records why that deadline was chosen.
 - `restore()` has no pagination cursor and costs seconds per blob; large
   namespaces may not fully restore in one call.
 

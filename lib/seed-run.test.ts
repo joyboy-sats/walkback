@@ -180,6 +180,47 @@ describe("runSeed", () => {
     expect(lines.some((line) => line.includes("post 2/2 post-b"))).toBe(true);
   });
 
+  it("does not write memories for posts the ledger has already applied", async () => {
+    applied.add("post-a");
+    applied.add("post-b");
+    const lines: string[] = [];
+    const result = await runSeed(file, { log: (line) => lines.push(line) });
+    expect(result.ok).toBe(true);
+    expect(ingestMocks.persistIngestWrites).not.toHaveBeenCalled();
+    expect(ingestMocks.markSeedPostApplied).not.toHaveBeenCalled();
+    expect(result.summary).toContain("2 already present");
+    expect(lines.some((line) => line.includes("skipped"))).toBe(true);
+    expect(lines.some((line) => line.includes("tatum OHLCV estimate"))).toBe(true);
+    expect(lines.some((line) => line.includes("tatum OHLCV observed this run: 0 single"))).toBe(true);
+  });
+
+  it("does not call Tatum when the expected OHLCV cost exceeds the cap", async () => {
+    const past = post("post-a", "alpha");
+    past.published_at = "2026-09-20T00:00:00.000Z";
+    past.claims = [
+      {
+        quote: "SUI will trade above 2 USD.",
+        claim_type: "price_threshold",
+        params: { symbol: "SUI", quote: "USD", direction: "gte", amount: "2", evaluation: "touch" },
+        deadline: "2026-10-01T00:00:00.000Z",
+        deadline_basis: "stated in post",
+        confidence: 0.8,
+      },
+    ];
+    const lines: string[] = [];
+    const result = await runSeed(
+      { posts: [past] },
+      { log: (line) => lines.push(line), ohlcvCreditCap: 0, now: new Date("2026-10-23T00:00:00.000Z") },
+    );
+    expect(result.ok).toBe(false);
+    expect(resolveMocks.resolveDueClaims).not.toHaveBeenCalled();
+    expect(result.summary).toContain("exceeds SEED_OHLCV_CREDIT_CAP 0");
+    expect(result.summary).toContain("status     incomplete");
+    expect(lines.some((line) => line.includes("aborting before Tatum"))).toBe(true);
+    expect(lines.some((line) => line.includes("expected 500 credits"))).toBe(true);
+    expect(lines.some((line) => line.includes("tatum OHLCV observed this run: 0 single"))).toBe(true);
+  });
+
   it("continues to the next post when a failure is not a timeout, and still does not mark the failed post", async () => {
     ingestMocks.persistIngestWrites.mockImplementation(async (writes: MemoryWrite[]) => {
       if (writes[0]?.idempotencyKey === "claim:post-a") throw new Error("database down");

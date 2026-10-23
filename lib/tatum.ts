@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { withRetry } from "./bounded";
 import { env, isReplay } from "./env";
 import {
+  noteOhlcvRequest,
   parseTatumCandle,
   parseTatumCandles,
   type PriceCandle,
@@ -704,13 +705,19 @@ async function ohlcvRequest(
   if (!e.TATUM_API_KEY) throw new TatumError("TATUM_API_KEY is not set", undefined, "ohlcv");
   const endpoint = kind === "at" ? e.TATUM_OHLCV_URL : e.TATUM_OHLCV_BATCH_URL;
 
-  return withRetry(() => requestOhlcv(e.TATUM_API_KEY!, buildUrl(endpoint), fixtureKey), {
+  return withRetry(() => requestOhlcv(e.TATUM_API_KEY!, buildUrl(endpoint), fixtureKey, kind), {
     attempts: RATE_ATTEMPTS,
     backoffMs: RATE_BACKOFF_MS,
   });
 }
 
-async function requestOhlcv(apiKey: string, url: string, fixtureKey: string): Promise<unknown> {
+async function requestOhlcv(
+  apiKey: string,
+  url: string,
+  fixtureKey: string,
+  kind: "at" | "batch",
+): Promise<unknown> {
+  noteOhlcvRequest(kind === "at" ? "single" : "batch");
   await rpcLimiter.acquire();
   const res = await fetch(url, {
     headers: { accept: "application/json", "x-api-key": apiKey },

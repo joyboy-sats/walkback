@@ -190,13 +190,13 @@ describe("adjudicate voids", () => {
 
   it("checks a touch against the window high and ignores the clock", async () => {
     const since = "2026-09-01T00:00:00.000Z";
-    const deadline = "2026-09-01T03:00:00.000Z";
-    vi.mocked(getOhlcvPage).mockImplementation(async (_symbol, from) => {
+    const deadline = "2026-09-04T00:00:00.000Z";
+    vi.mocked(getOhlcvPage).mockImplementation(async (_symbol, from, interval) => {
+      expect(interval).toBe("1d");
       const start = Date.parse(from);
-      if (start > Date.parse(since)) return [];
-      return [0, 1, 2].map((i) =>
-        hourCandle(Date.parse(since) + i * INTERVAL_MS["1h"], i === 1 ? 2.4 : 1.2, 1, 1, "ETH"),
-      );
+      return [0, 1, 2]
+        .map((i) => dayCandle(Date.parse(since) + i * INTERVAL_MS["1d"], i === 1 ? 2.4 : 1.2, 1, "ETH"))
+        .filter((item) => item.openTimeMs >= start);
     });
 
     const params = {
@@ -209,7 +209,7 @@ describe("adjudicate voids", () => {
     };
     const early = await adjudicate(
       input({ claimType: "price_threshold", params, snapshot: null, deadline }),
-      new Date("2026-09-02T00:00:00.000Z"),
+      new Date("2026-09-05T00:00:00.000Z"),
     );
     const late = await adjudicate(
       input({ claimType: "price_threshold", params, snapshot: null, deadline }),
@@ -219,10 +219,10 @@ describe("adjudicate voids", () => {
     expect(early.outcome).toBe("true");
     expect(late.outcome).toBe(early.outcome);
     expect(late.reason).toBe(early.reason);
-    expect(early.reason).toContain("1h high was 2.4");
+    expect(early.reason).toContain("1d high was 2.4");
     expect(early.reason).toContain(since);
     expect(early.evidence).toMatchObject({
-      interval: "1h",
+      interval: "1d",
       window: { from: since, to: deadline },
       extreme: { field: "high", value: 2.4 },
     });
@@ -341,6 +341,21 @@ describe("adjudicate voids", () => {
 
 function input(partial: AdjudicationInput): AdjudicationInput {
   return partial;
+}
+
+function dayCandle(openMs: number, high: number, low: number, symbol = "SUI"): PriceCandle {
+  const closeTimeMs = openMs + INTERVAL_MS["1d"] - 1;
+  return {
+    symbol,
+    openTimeMs: openMs,
+    closeTimeMs,
+    openTime: new Date(openMs).toISOString(),
+    closeTime: new Date(closeTimeMs).toISOString(),
+    open: low,
+    high,
+    low,
+    close: (high + low) / 2,
+  };
 }
 
 function hourCandle(openMs: number, high: number, low: number, open = low, symbol = "SUI"): PriceCandle {

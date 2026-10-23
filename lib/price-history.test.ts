@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { INTERVAL_MS, type PriceCandle } from "./price-candle";
+import { INTERVAL_MS, parseTatumCandle, parseTatumCandles, type PriceCandle } from "./price-candle";
 import {
   coverWindow,
   loadDeadlinePrice,
@@ -31,11 +32,16 @@ function candle(
   };
 }
 
-function hours(count: number, highAt: (i: number) => number, lowAt: (i: number) => number = () => 1): PriceCandle[] {
-  return Array.from({ length: count }, (_, i) => candle(START + i * INTERVAL_MS["1h"], "1h", highAt(i), lowAt(i)));
+function days(count: number, highAt: (i: number) => number, lowAt: (i: number) => number = () => 1): PriceCandle[] {
+  return Array.from({ length: count }, (_, i) => candle(START + i * INTERVAL_MS["1d"], "1d", highAt(i), lowAt(i)));
+}
+
+function hoursFrom(openMs: number, count: number, high: number, low = 1): PriceCandle[] {
+  return Array.from({ length: count }, (_, i) => candle(openMs + i * INTERVAL_MS["1h"], "1h", high, low));
 }
 
 function sourceOf(pages: {
+  "1m"?: PriceCandle[] | "400" | "unsupported";
   "1h"?: PriceCandle[] | "400" | "unsupported";
   "1d"?: PriceCandle[] | "400" | "unsupported";
   at?: Record<string, PriceCandle | null | "unsupported">;
@@ -62,76 +68,140 @@ function sourceOf(pages: {
 
 describe("loadTouchWindow", () => {
   const from = new Date(START).toISOString();
-  const to = new Date(START + 3 * INTERVAL_MS["1h"]).toISOString();
+  const to = new Date(START + 3 * INTERVAL_MS["1d"]).toISOString();
 
-  it("is true when the hourly high reaches an upside target, and false when it does not", async () => {
-    const candles = hours(3, (i) => (i === 1 ? 1.4 : 1.1), () => 1);
-    const hit = await loadTouchWindow(sourceOf({ "1h": candles }), {
+  it("is true when an interior daily high reaches an upside target, and false when every daily high is short", async () => {
+    const candles = days(3, (i) => (i === 1 ? 1.4 : 1.1), () => 1);
+    const src = sourceOf({ "1d": candles, "1h": "400" });
+    const hit = await loadTouchWindow(src, {
       symbol: "SUI",
       from,
       to,
       direction: "gte",
+      threshold: "1.28",
     });
     expect(hit.ok).toBe(true);
     if (!hit.ok) return;
-    expect(hit.interval).toBe("1h");
+    expect(hit.interval).toBe("1d");
+    expect(hit.touched).toBe(true);
     expect(hit.extreme).toMatchObject({ value: 1.4, field: "high", at: candles[1]!.openTime });
-    expect(hit.extreme.value >= 1.28).toBe(true);
-    expect(hit.extreme.value >= 1.5).toBe(false);
+    expect(hit.extreme.bound).toBeUndefined();
+    expect(hit.decidingCandles[0]).toMatchObject({ role: "interior", usedAs: "establishes" });
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
 
-    const miss = await loadTouchWindow(sourceOf({ "1h": hours(3, () => 1.1) }), {
+    const missSrc = sourceOf({ "1d": days(3, () => 1.1), "1h": "400" });
+    const miss = await loadTouchWindow(missSrc, {
       symbol: "SUI",
       from,
       to,
       direction: "gte",
+      threshold: "1.28",
     });
+    expect(miss.ok && miss.touched).toBe(false);
     expect(miss.ok && miss.extreme.value >= 1.28).toBe(false);
+    expect(missSrc.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
   });
 
-  it("uses the hourly low for a downside touch", async () => {
-    const candles = hours(3, () => 1.2, (i) => (i === 2 ? 0.8 : 1.05));
-    const loaded = await loadTouchWindow(sourceOf({ "1h": candles }), {
+  it("uses the daily low for a downside touch", async () => {
+    const candles = days(3, () => 1.2, (i) => (i === 2 ? 0.8 : 1.05));
+    const src = sourceOf({ "1d": candles, "1h": "400" });
+    const loaded = await loadTouchWindow(src, {
       symbol: "SUI",
       from,
       to,
       direction: "lte",
+      threshold: "0.9",
     });
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
+    expect(loaded.touched).toBe(true);
     expect(loaded.extreme).toMatchObject({ value: 0.8, field: "low" });
     expect(loaded.minLow.value).toBe(0.8);
     expect(loaded.maxHigh.value).toBe(1.2);
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
+  });
+
+  it("proves a miss from a boundary day whose high is still short of the target", async () => {
+    const fromMs = START + 6 * INTERVAL_MS["1h"];
+    const partial = candle(START, "1d", 1.5, 1);
+    const interior = days(2, () => 1.2).map((item, i) => {
+      const openMs = START + (i + 1) * INTERVAL_MS["1d"];
+      return candle(openMs, "1d", 1.2, 1);
+    });
+    const src = sourceOf({ "1d": [partial, ...interior], "1h": "400" });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: new Date(fromMs).toISOString(),
+      to: new Date(START + 3 * INTERVAL_MS["1d"]).toISOString(),
+      direction: "gte",
+      threshold: "2",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(false);
+    expect(loaded.extreme).toMatchObject({ value: 1.5, bound: true });
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
+  });
+
+  it("refines only the boundary day whose high reaches the target", async () => {
+    const fromMs = START + 6 * INTERVAL_MS["1h"];
+    const dayEnd = START + INTERVAL_MS["1d"];
+    const daily = [
+      candle(START, "1d", 5, 1),
+      candle(dayEnd, "1d", 1.1, 1),
+      candle(START + 2 * INTERVAL_MS["1d"], "1d", 1.1, 1),
+    ];
+    const hourly = hoursFrom(fromMs, 18, 1);
+    const src = sourceOf({ "1d": daily, "1h": hourly, "1m": "400" });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: new Date(fromMs).toISOString(),
+      to: new Date(START + 3 * INTERVAL_MS["1d"]).toISOString(),
+      direction: "gte",
+      threshold: "2",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(false);
+    expect(loaded.extreme.value).toBe(1.1);
+    expect(loaded.extreme.text).not.toBe("5");
+    expect(src.calls.filter((call) => call.startsWith("page 1h"))).toEqual([
+      `page 1h ${new Date(fromMs - INTERVAL_MS["1h"]).toISOString()}`,
+    ]);
+    expect(src.calls.some((call) => call.startsWith("page 1m"))).toBe(false);
   });
 
   it("does not change the extreme when the same candles are read later", async () => {
-    const candles = hours(3, (i) => (i === 0 ? 2.2 : 1));
-    const first = await loadTouchWindow(sourceOf({ "1h": candles }), {
+    const candles = days(3, (i) => (i === 0 ? 2.2 : 1));
+    const first = await loadTouchWindow(sourceOf({ "1d": candles }), {
       symbol: "SUI",
       from,
       to,
       direction: "gte",
+      threshold: "2",
     });
-    const later = await loadTouchWindow(sourceOf({ "1h": candles }), {
+    const later = await loadTouchWindow(sourceOf({ "1d": candles }), {
       symbol: "SUI",
       from,
       to,
       direction: "gte",
+      threshold: "2",
     });
     expect(first.ok && later.ok && first.extreme).toEqual(later.ok ? later.extreme : null);
   });
 
-  it("voids a hole in the hourly series instead of falling back to daily", async () => {
-    const candles = hours(3, () => 5).filter((_, i) => i !== 1);
-    const src = sourceOf({ "1h": candles, "1d": [candle(START, "1d", 9, 0.1)] });
-    const loaded = await loadTouchWindow(src, { symbol: "SUI", from, to, direction: "gte" });
+  it("voids a hole in the daily series instead of ignoring the missing day", async () => {
+    const candles = days(3, () => 1.1).filter((_, i) => i !== 1);
+    const src = sourceOf({ "1d": candles, "1h": hoursFrom(START, 24, 9) });
+    const loaded = await loadTouchWindow(src, { symbol: "SUI", from, to, direction: "gte", threshold: "1" });
     expect(loaded.ok).toBe(false);
     if (loaded.ok) return;
     expect(loaded.reason.toLowerCase()).toContain("missing");
-    expect(src.calls.some((call) => call.startsWith("page 1d"))).toBe(false);
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
   });
 
   it("allows the partial first hour the batch endpoint skips", () => {
-    const candles = hours(3, () => 1.2).slice(1);
+    const candles = hoursFrom(START, 3, 1.2).slice(1);
     const fromMs = START + 30 * 60 * 1000;
     const toMs = START + 3 * INTERVAL_MS["1h"];
     const covered = coverWindow(candles, fromMs, toMs, "1h");
@@ -140,41 +210,226 @@ describe("loadTouchWindow", () => {
     expect(covered.boundary.uncoveredStartMs).toBe(30 * 60 * 1000);
   });
 
-  it("falls back to daily candles when hourly is rejected", async () => {
+  it("voids a daily high that only overlaps a short window when the boundary hour cannot be read", async () => {
     const daily = [candle(START, "1d", 3, 0.9)];
     const src = sourceOf({ "1h": "400", "1d": daily });
-    const loaded = await loadTouchWindow(src, { symbol: "SUI", from, to, direction: "gte" });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from,
+      to: new Date(START + 3 * INTERVAL_MS["1h"]).toISOString(),
+      direction: "gte",
+      threshold: "1",
+    });
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.reason.toLowerCase()).toMatch(/not checked|edge|window/);
+    expect(src.calls[0]).toMatch(/^page 1d/);
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(true);
+  });
+
+  it("uses an interior daily candle and does not request hourly candles", async () => {
+    const daily = [0, 1, 2].map((i) => candle(START + i * INTERVAL_MS["1d"], "1d", i === 1 ? 2.5 : 1.1, 0.9));
+    const src = sourceOf({ "1h": "400", "1d": daily });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from,
+      to,
+      direction: "gte",
+      threshold: "2",
+    });
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.interval).toBe("1d");
-    expect(loaded.intervalFallback).toMatch(/hourly/);
-    expect(loaded.extreme.value).toBe(3);
+    expect(loaded.touched).toBe(true);
+    expect(loaded.extreme.value).toBe(2.5);
+    expect(loaded.decidingCandles[0]?.role).toBe("interior");
+    expect(src.calls.some((call) => call.startsWith("page 1h"))).toBe(false);
   });
 
-  it("voids an unsupported symbol without trying daily candles", async () => {
-    const src = sourceOf({ "1h": "unsupported", "1d": [candle(START, "1d", 1, 1)] });
-    const loaded = await loadTouchWindow(src, { symbol: "SOL", from, to, direction: "gte" });
+  it("voids an unsupported symbol from the daily read", async () => {
+    const src = sourceOf({ "1h": [candle(START, "1h", 1, 1)], "1d": "unsupported" });
+    const loaded = await loadTouchWindow(src, { symbol: "SOL", from, to, direction: "gte", threshold: "1" });
     expect(loaded.ok).toBe(false);
     if (loaded.ok) return;
     expect(loaded.reason.toLowerCase()).toMatch(/does not cover|unsupported/);
-    expect(src.calls).toEqual([expect.stringMatching(/^page 1h/)]);
+    expect(src.calls).toEqual([expect.stringMatching(/^page 1d/)]);
   });
 
-  it("uses daily candles when the window is longer than the hourly budget", async () => {
+  it("reads a long window as daily candles and does not page through hours", async () => {
     const span = 50 * INTERVAL_MS["1d"];
     const daily = Array.from({ length: 51 }, (_, i) => candle(START + i * INTERVAL_MS["1d"], "1d", 1.2, 0.9));
-    const src = sourceOf({ "1d": daily });
+    const src = sourceOf({ "1d": daily, "1h": "400" });
     const loaded = await loadTouchWindow(src, {
       symbol: "SUI",
       from: new Date(START).toISOString(),
       to: new Date(START + span).toISOString(),
       direction: "lte",
+      threshold: "1",
     });
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.interval).toBe("1d");
+    expect(loaded.touched).toBe(true);
     expect(src.calls.every((call) => call.startsWith("page 1d"))).toBe(true);
     expect(loaded.extreme.value).toBe(0.9);
+  });
+});
+
+describe("strict window touch", () => {
+  const hour = JSON.parse(readFileSync("fixtures/tatum/ohlcv-boundary-hour.json", "utf8"));
+  const minutesMiss = JSON.parse(readFileSync("fixtures/tatum/ohlcv-boundary-minutes-miss.json", "utf8"));
+  const minutesHit = JSON.parse(readFileSync("fixtures/tatum/ohlcv-boundary-minutes-hit.json", "utf8"));
+  const unroundedHit = JSON.parse(readFileSync("fixtures/tatum/ohlcv-unrounded-hit.json", "utf8"));
+  const unroundedMiss = JSON.parse(readFileSync("fixtures/tatum/ohlcv-unrounded-miss.json", "utf8"));
+
+  const published = "2026-08-06T06:35:06.000Z";
+  const deadline = "2026-08-06T08:00:00.000Z";
+
+  function parsed(raw: unknown): PriceCandle {
+    const candle = parseTatumCandle(raw);
+    if (!candle) throw new Error("fixture candle did not parse");
+    return candle;
+  }
+
+  function parsedList(raw: unknown): PriceCandle[] {
+    const candles = parseTatumCandles(raw);
+    if (!candles) throw new Error("fixture candles did not parse");
+    return candles;
+  }
+
+  function spanningDay(high = 0.8): PriceCandle {
+    return candle(Date.parse("2026-08-06T00:00:00.000Z"), "1d", high, 0.5);
+  }
+
+  it("does not let a boundary hour establish a touch when the in-window minutes miss", async () => {
+    const hourly = [parsed(hour.leading), parsed(hour.interior)];
+    const src = sourceOf({ "1d": [spanningDay()], "1h": hourly, "1m": parsedList(minutesMiss) });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: published,
+      to: deadline,
+      direction: "gte",
+      threshold: "0.72",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(false);
+    expect(loaded.extreme.text).not.toBe("0.73000000");
+    expect(Number(loaded.extreme.text)).toBeLessThan(0.72);
+    expect(loaded.windowHigh?.text).not.toBe("0.73000000");
+    expect(loaded.decidingCandles.some((candle) => candle.role === "refined")).toBe(true);
+    expect(loaded.decidingCandles.every((candle) => candle.high !== "0.73000000")).toBe(true);
+    expect(src.calls.some((call) => call.startsWith("page 1m"))).toBe(true);
+  });
+
+  it("accepts a touch once a minute inside the window prints it", async () => {
+    const hourly = [parsed(hour.leading), parsed(hour.interior)];
+    const src = sourceOf({ "1d": [spanningDay()], "1h": hourly, "1m": parsedList(minutesHit) });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: published,
+      to: deadline,
+      direction: "gte",
+      threshold: "0.72",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(true);
+    expect(loaded.extreme.text).toBe("0.72500000");
+    expect(loaded.extreme.bound).toBeUndefined();
+    expect(loaded.decidingCandles[0]).toMatchObject({
+      role: "refined",
+      usedAs: "establishes",
+      openTime: "2026-08-06T06:40:00.000Z",
+      high: "0.72500000",
+    });
+    expect(loaded.windowHigh?.text).toBe("0.72500000");
+  });
+
+  it("refutes from the boundary hour itself when that hour's high misses, without minute candles", async () => {
+    const leading = parsed(hour.leading);
+    leading.high = 0.71;
+    leading.highText = "0.71000000";
+    const src = sourceOf({ "1d": [spanningDay()], "1h": [leading, parsed(hour.interior)], "1m": parsedList(minutesHit) });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: published,
+      to: deadline,
+      direction: "gte",
+      threshold: "0.72",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(false);
+    expect(loaded.extreme).toMatchObject({ text: "0.71000000", bound: true });
+    expect(src.calls.some((call) => call.startsWith("page 1m"))).toBe(false);
+  });
+
+  it("keeps an interior touch when an earlier boundary hour printed a higher high", async () => {
+    const leading = parsed(hour.leading);
+    leading.high = 9;
+    leading.highText = "9.00000000";
+    const interior = parsed(hour.interior);
+    interior.high = 1.5;
+    interior.highText = "1.50000000";
+    const src = sourceOf({ "1d": [spanningDay(9)], "1h": [leading, interior], "1m": parsedList(minutesHit) });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: published,
+      to: deadline,
+      direction: "gte",
+      threshold: "1.2",
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.touched).toBe(true);
+    expect(loaded.windowHigh?.text).toBe("1.50000000");
+    expect(loaded.extreme.text).toBe("1.50000000");
+    expect(src.calls.some((call) => call.startsWith("page 1m"))).toBe(false);
+  });
+
+  it("compares the fixture's unrounded high and does not treat 0.99999999 as 1", async () => {
+    const hitCandle = parsed(unroundedHit);
+    const missCandle = parsed(unroundedMiss);
+    const hitDay = candle(hitCandle.openTimeMs - (hitCandle.openTimeMs % INTERVAL_MS["1d"]), "1d", 2, 0.5);
+    const missDay = candle(missCandle.openTimeMs - (missCandle.openTimeMs % INTERVAL_MS["1d"]), "1d", 2, 0.5);
+    const fromMs = hitCandle.openTimeMs;
+    const toMs = fromMs + INTERVAL_MS["1h"];
+    const hit = await loadTouchWindow(sourceOf({ "1d": [hitDay], "1h": [hitCandle] }), {
+      symbol: "SUI",
+      from: new Date(fromMs).toISOString(),
+      to: new Date(toMs).toISOString(),
+      direction: "gte",
+      threshold: "1",
+    });
+    const miss = await loadTouchWindow(sourceOf({ "1d": [missDay], "1h": [missCandle] }), {
+      symbol: "SUI",
+      from: missCandle.openTime,
+      to: new Date(missCandle.openTimeMs + INTERVAL_MS["1h"]).toISOString(),
+      direction: "gte",
+      threshold: "1",
+    });
+    expect(hit.ok && hit.touched).toBe(true);
+    expect(hit.ok && hit.extreme.text).toBe("1.00000001");
+    expect(miss.ok && miss.touched).toBe(false);
+    expect(miss.ok && miss.extreme.text).toBe("0.99999999");
+    expect(Number(miss.ok ? miss.extreme.text : "0").toFixed(2)).toBe("1.00");
+  });
+
+  it("voids when the finer candles still cannot place a boundary extreme inside the window", async () => {
+    const hourly = [parsed(hour.leading), parsed(hour.interior)];
+    const src = sourceOf({ "1d": [spanningDay()], "1h": hourly, "1m": "400" });
+    const loaded = await loadTouchWindow(src, {
+      symbol: "SUI",
+      from: published,
+      to: deadline,
+      direction: "gte",
+      threshold: "0.72",
+    });
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.reason.toLowerCase()).toMatch(/not checked|edge|window/);
+    expect(loaded.evidence).toMatchObject({ timingAmbiguity: true, strictWindow: true });
   });
 });
 

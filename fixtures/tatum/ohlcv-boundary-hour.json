@@ -1,0 +1,30 @@
+{
+  "leading": {
+    "symbol": "SUI",
+    "openTime": 1785996000000,
+    "open": "0.69000000",
+    "high": "0.73000000",
+    "low": "0.69000000",
+    "close": "0.69000000",
+    "closeTime": 1785999599999,
+    "volume": "1.00000000",
+    "quoteAssetVolume": "1.00000000",
+    "numberOfTrades": 1,
+    "takerBuyBaseAssetVolume": "1.00000000",
+    "takerBuyQuoteAssetVolume": "1.00000000"
+  },
+  "interior": {
+    "symbol": "SUI",
+    "openTime": 1785999600000,
+    "open": "0.68000000",
+    "high": "0.70000000",
+    "low": "0.68000000",
+    "close": "0.68000000",
+    "closeTime": 1786003199999,
+    "volume": "1.00000000",
+    "quoteAssetVolume": "1.00000000",
+    "numberOfTrades": 1,
+    "takerBuyBaseAssetVolume": "1.00000000",
+    "takerBuyQuoteAssetVolume": "1.00000000"
+  }
+}

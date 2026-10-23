@@ -1,0 +1,14 @@
+{
+  "symbol": "SUI",
+  "openTime": 1790812800000,
+  "open": "0.90000000",
+  "high": "0.99999999",
+  "low": "0.90000000",
+  "close": "0.90000000",
+  "closeTime": 1790816399999,
+  "volume": "1.00000000",
+  "quoteAssetVolume": "1.00000000",
+  "numberOfTrades": 1,
+  "takerBuyBaseAssetVolume": "1.00000000",
+  "takerBuyQuoteAssetVolume": "1.00000000"
+}

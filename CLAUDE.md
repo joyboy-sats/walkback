@@ -70,8 +70,13 @@ Hackathon: Walrus x Tatum "Total Recall". Deadline 2026-11-10 17:00 UTC
   `GET /v4/data/rate/symbol/OHLCV/batch` (up to 50 candles, 500 credits).
   `time` and `timeFrom` are ISO-8601 UTC strings (`2025-10-09T08:00:00Z`).
   Epoch milliseconds are rejected with HTTP 400 (`time must be a Date instance`).
-  Hourly first, daily if hourly cannot be requested. A 404 or a candle that
-  does not cover the window resolves `void`. There is no CoinGecko client.
+  A touch starts with daily candles. A daily candle fully inside the window
+  can establish a touch. If every overlapping daily high (a rise) or low (a
+  fall) is short of the target, the claim is false and no hourly data is
+  read. Only a boundary day whose extreme reaches the target, or a missing
+  edge, is refined to hourly, then to one minute for a boundary hour. A 404
+  or a candle that does not cover the window resolves `void`. There is no
+  CoinGecko client.
   The nearest-candle behavior of the single endpoint is not a price: if the
   returned bucket does not contain the requested time, the verdict is void.
 
