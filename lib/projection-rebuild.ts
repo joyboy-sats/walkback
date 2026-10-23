@@ -18,6 +18,7 @@
  */
 import "server-only";
 
+import { parseFencedJson } from "./stored-resolution";
 import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
 import { applyOutcome, computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
@@ -156,19 +157,7 @@ export async function gatherMemories(
   return { memories, rawHits, duplicatesDropped: rawHits - memories.length };
 }
 
-/** Pull the fenced JSON block `memory-text.ts` appends. Null when it is missing or broken. */
-export function parseFencedJson(text: string): Record<string, unknown> | null {
-  const match = text.match(/```json\s*([\s\S]*?)```/);
-  const body = match?.[1];
-  if (!body) return null;
-  try {
-    const value = JSON.parse(body) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    return value as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+export { parseFencedJson } from "./stored-resolution";
 
 export interface RebuiltSource {
   id: string;

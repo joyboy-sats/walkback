@@ -85,8 +85,11 @@ What works today:
   end (health → write → recall) and prints the delegate public key
   (`getPublicKeyHex()`, the submission form's `MEMWAL_AGENT_ID`).
 - `npm run list:memories` — with `.env.local` on a machine that has the
-  delegate key, pages the relayer inventory and prints counts only. It reads
-  `MEMWAL_ACCOUNT_ID`, `MEMWAL_PRIVATE_KEY`, and `MEMWAL_SERVER_URL` only.
+  delegate key, pages the relayer list and prints counts only. That number is
+  every live memory on the delegate, including blobs never written to
+  Postgres. It is not the homepage "memories · logged" figure, which counts
+  `memory_log` rows. It reads `MEMWAL_ACCOUNT_ID`, `MEMWAL_PRIVATE_KEY`, and
+  `MEMWAL_SERVER_URL` only.
 - `npm run test`, `npm run typecheck`, `npm run build`.
 
 ## Why the design looks like this
@@ -320,9 +323,11 @@ is the same migrator for a one-off.
 
 Reads (`GET /feed`, `/ledger`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
 `/ledger` is the homepage summary: every source (band, hits, misses, claim
-types) and the projection totals. The memory total is the projection
-inventory. It is labeled verified only when the newest finished rebuild job
-reported a complete Walrus list walk.
+types) and the projection totals. The memory total labeled "logged" is the
+number of `memory_log` rows. It is labeled verified only when the newest
+finished rebuild job reported a complete Walrus list walk. `npm run
+list:memories` counts the relayer list instead, so the two numbers differ
+when Walrus has blobs the projection never logged.
 Writes (`POST /ingest`, `/rebuild`, `/resolve`, `/restore`) require the header
 `x-admin-token: <ADMIN_TOKEN>`. CORS reflects `CORS_ORIGIN` only.
 
@@ -371,9 +376,9 @@ The API does not need the Walrus or Tatum keys.
 | `DEMO_MODE` | `live` |
 | `WORKER_POLL_MS` | Optional. Default `2000`. |
 | `WORKER_RESOLVE_MS` | Optional. Default `60000`. Set `0` to skip the periodic resolve pass. The pass enqueues only when a claim is pending and past its deadline, and it waits longer after a claim's resolve keeps throwing. |
-| `SEED_OHLCV_CREDIT_CAP` | Optional. Default `20000`. `npm run seed` skips resolve, and does not call Tatum, when the expected daily-candle cost of past-deadline price claims is above this. |
+| `SEED_OHLCV_CREDIT_CAP` | Optional. Default `20000`. `npm run seed` skips resolve, and does not call Tatum, when the expected daily-candle cost of still-pending past-deadline price claims is above this. Claims that already have a verdict are not counted. |
 
-Seed is a one-off in the worker container's terminal, after the image is deployed: `npm run seed`, then `npm run list:memories`. The worker image includes `scripts/`, `data/claims.json`, and `tsx`.
+Seed is a one-off in the worker container's terminal, after the image is deployed: `npm run seed`, then `npm run list:memories`. A second run skips posts and claims that already finished, and it does not call Tatum for those claims. `list:memories` prints the relayer list; the homepage "memories · logged" number is `memory_log`, a different set. The worker image includes `scripts/`, `data/claims.json`, and `tsx`.
 
 ## Known open questions
 

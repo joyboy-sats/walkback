@@ -18,6 +18,7 @@ import { configureDbPool, getDb, schema, closeDb } from "./db";
 import { ingest, markSeedPostApplied, persistIngestWrites } from "./ingest";
 import { destroyMemwal } from "./memwal";
 import { resolveDueClaims } from "./resolve";
+import { formatResolveLine } from "./stored-resolution";
 import { ohlcvCreditUsage, resetOhlcvCreditUsage } from "./price-candle";
 import {
   estimateSeedOhlcv,
@@ -138,14 +139,15 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
   }
 
   const now = options.now ?? new Date();
-  const ohlcvEstimate = estimateSeedOhlcv(file.posts, now);
+  const resolvedExternalIds = await settledExternalIds();
+  const ohlcvEstimate = estimateSeedOhlcv(file.posts, now, { resolvedExternalIds });
   log(
-    `[seed] tatum OHLCV estimate: ${ohlcvEstimate.claims} past-deadline price claim(s), ` +
+    `[seed] tatum OHLCV estimate: ${ohlcvEstimate.claims} still-pending past-deadline price claim(s), ` +
       `expected ${ohlcvEstimate.credits} credits ` +
-      `(${ohlcvEstimate.batchCalls} daily batch + ${ohlcvEstimate.singleCalls} single) ` +
-      `if each is still unresolved. ` +
+      `(${ohlcvEstimate.batchCalls} daily batch + ${ohlcvEstimate.singleCalls} single). ` +
       `Worst case ${ohlcvEstimate.worstCredits} credits if every boundary day and hour is refined. ` +
-      `Cap ${creditCap}. Already-resolved claims are not checked again.`,
+      `Cap ${creditCap}. Already-resolved claims are skipped and are not checked again. ` +
+      `A pending claim whose resolution memory is already on Walrus is adopted and does not call Tatum.`,
   );
   const resolveLimit = options.resolveLimit ?? 200;
   let resolveErrors: Array<{ claimId: string; error: string }> = [];
@@ -167,11 +169,12 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
         onList(ids) {
           log(`[seed] resolve phase: ${ids.length} due claim(s)`);
         },
-        onClaimStart(claimId) {
-          log(`[seed] resolve start ${claimId}`);
+        onClaimLoaded(claim) {
+          const ext = claim.externalId ? ` ${claim.externalId}` : "";
+          log(`[seed] resolve ${claim.handle} ${claim.claimId}${ext}`);
         },
         onClaimDone(report, elapsedMs) {
-          log(`[seed] resolve done ${report.claimId} ${report.outcome} ${elapsedMs}ms`);
+          log(`[seed] resolve done ${formatResolveLine(report)} ${elapsedMs}ms`);
         },
         onClaimError(claimId, error, elapsedMs) {
           log(`[seed] resolve failed ${claimId} ${elapsedMs}ms: ${error}`);
@@ -231,6 +234,18 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
     summaryInput.resolveErrors.length === 0;
   log(`[seed] ${ok ? "finished" : "finished incomplete"}`);
   return { summary, ok };
+}
+
+/** Claims that already have a verdict. A rerun must not budget Tatum for them. */
+async function settledExternalIds(): Promise<Set<string>> {
+  const rows = await getDb()
+    .select({ externalId: schema.claims.externalId, status: schema.claims.status })
+    .from(schema.claims);
+  const settled = new Set<string>();
+  for (const row of rows) {
+    if (row.externalId && row.status !== "pending") settled.add(row.externalId);
+  }
+  return settled;
 }
 
 async function readSummary(

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DeadlineError,
   isDeadlineError,
+  isIdempotencyConflict,
+  isRateLimited,
   isRetryableError,
+  retryAfterSeconds,
   withDeadline,
   withFetchDeadline,
   withRetry,
@@ -109,6 +112,50 @@ describe("withRetry", () => {
       ),
     ).rejects.toThrow(/unavailable/);
     expect(server).toBe(3);
+  });
+});
+
+describe("rate limit and idempotency errors", () => {
+  const rateLimited = Object.assign(
+    new Error('Walrus Memory server error (429): {"error":"delegate_key limit","retry_after_seconds":60}'),
+    { status: 429, cause: '{"retry_after_seconds":60}' },
+  );
+
+  it("reads retry_after_seconds from the body and treats 409 idempotency conflicts as final", () => {
+    expect(isRateLimited(rateLimited)).toBe(true);
+    expect(retryAfterSeconds(rateLimited)).toBe(60);
+    expect(isRetryableError(rateLimited)).toBe(true);
+    const conflict = Object.assign(
+      new Error(
+        'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
+      ),
+      { status: 409 },
+    );
+    expect(isIdempotencyConflict(conflict)).toBe(true);
+    expect(isRetryableError(conflict)).toBe(false);
+    expect(isIdempotencyConflict(rateLimited)).toBe(false);
+  });
+
+  it("waits out a 429 instead of the short backoff curve", async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    await withRetry(
+      async () => {
+        calls += 1;
+        if (calls === 1) throw rateLimited;
+        return "ok";
+      },
+      {
+        attempts: 2,
+        backoffMs: 2_000,
+        delayFor: () => 60_000,
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      },
+    );
+    expect(calls).toBe(2);
+    expect(delays).toEqual([60_000]);
   });
 });
 

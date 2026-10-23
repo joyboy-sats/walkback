@@ -158,8 +158,60 @@ export interface RetryInfo {
 }
 
 /**
+ * Seconds the relayer asked us to wait. The header is `retryAfterSeconds`
+ * on the SDK error; the body field `retry_after_seconds` survives when a
+ * proxy strips the header. The raw body is `error.cause`.
+ */
+export function retryAfterSeconds(err: unknown): number | undefined {
+  for (const item of walkErrors(err)) {
+    if (item && typeof item === "object" && "retryAfterSeconds" in item) {
+      const seconds = (item as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+      if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) return seconds;
+    }
+    const text = errorText(item);
+    if (!text) continue;
+    const match = text.match(/"retry_after_seconds"\s*:\s*(\d+(?:\.\d+)?)/);
+    if (match) {
+      const seconds = Number(match[1]);
+      if (Number.isFinite(seconds) && seconds > 0) return seconds;
+    }
+  }
+  return undefined;
+}
+
+/** 429 from the delegate limiter. Status polls count, so a short retry re-trips it. */
+export function isRateLimited(err: unknown): boolean {
+  for (const item of walkErrors(err)) {
+    if (httpStatus(item) === 429) return true;
+    const text = errorText(item);
+    if (text && /\(429\)|\bstatus(?:\s+code)?\s*[:=]?\s*429\b/.test(text)) return true;
+  }
+  return false;
+}
+
+/**
+ * The relayer already accepted this idempotency key with different bytes.
+ * Retrying the same body is not what this error means, and a new key would
+ * append a second memory.
+ */
+export function isIdempotencyConflict(err: unknown): boolean {
+  let conflict = false;
+  let status409 = false;
+  for (const item of walkErrors(err)) {
+    if (httpStatus(item) === 409) status409 = true;
+    const text = errorText(item);
+    if (!text) continue;
+    if (/\(409\)/.test(text)) status409 = true;
+    if (/idempotency_key was already used/i.test(text) || /different content/i.test(text)) conflict = true;
+  }
+  return status409 && conflict;
+}
+
+/**
  * Call `work` up to `attempts` times. The delay after attempt 1 is
- * `backoffMs`, then doubles, capped by `maxBackoffMs`.
+ * `backoffMs`, then doubles, capped by `maxBackoffMs`. `delayFor` replaces
+ * that curve for one error — a 429 uses the relayer's retry-after instead
+ * of the 2s/4s curve.
  */
 export async function withRetry<T>(
   work: () => Promise<T>,
@@ -168,6 +220,7 @@ export async function withRetry<T>(
     backoffMs: number;
     maxBackoffMs?: number;
     isRetryable?: (err: unknown) => boolean;
+    delayFor?: (err: unknown, attempt: number) => number;
     sleep?: (ms: number) => Promise<void>;
     onRetry?: (info: RetryInfo) => void;
   },
@@ -186,12 +239,36 @@ export async function withRetry<T>(
     } catch (err) {
       last = err;
       if (attempt === attempts || !isRetryable(err)) throw err;
-      const delayMs = Math.min(maxBackoffMs, opts.backoffMs * 2 ** (attempt - 1));
+      const delayMs = opts.delayFor
+        ? opts.delayFor(err, attempt)
+        : Math.min(maxBackoffMs, opts.backoffMs * 2 ** (attempt - 1));
       opts.onRetry?.({ attempt, attempts, delayMs, error: err });
       if (delayMs > 0) await sleep(delayMs);
     }
   }
   throw last;
+}
+
+function walkErrors(err: unknown): unknown[] {
+  const out: unknown[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = err;
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    if (typeof current === "object") seen.add(current);
+    out.push(current);
+    if (typeof current !== "object") break;
+    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return out;
+}
+
+function errorText(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (item instanceof Error) return item.message;
+  if (item && typeof item === "object" && "message" in item && typeof (item as { message?: unknown }).message === "string") {
+    return (item as { message: string }).message;
+  }
+  return "";
 }
 
 function assertTimeout(timeoutMs: number): void {

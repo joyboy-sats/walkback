@@ -20,6 +20,7 @@ import { finishScript } from "../lib/script-exit";
 config({ path: ".env.local" });
 
 const { destroyMemwal, listAllMemories } = await import("../lib/memwal");
+const { formatRelayerListLines } = await import("../lib/stored-resolution");
 
 let code = 0;
 try {
@@ -32,6 +33,7 @@ try {
     live += 1;
     byNamespace.set(memory.namespaceId, (byNamespace.get(memory.namespaceId) ?? 0) + 1);
   }
+  for (const line of formatRelayerListLines(live)) console.log(line);
   console.log(`live ${live}`);
   console.log(`deleted ${walk.deleted.length}`);
   console.log(`pages ${walk.pages}`);

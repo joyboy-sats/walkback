@@ -19,6 +19,7 @@ vi.mock("@mysten-incubation/memwal", () => ({
 }));
 
 import { destroyMemwal, writeMemory, type MemoryWrite } from "./memwal";
+import { memwalWriteLimiter, REMEMBER_POLL_INTERVAL_MS } from "./ratelimit";
 
 const write: MemoryWrite = {
   text: "hello",
@@ -34,6 +35,7 @@ const fast = {
 
 afterEach(() => {
   destroyMemwal();
+  memwalWriteLimiter.fill();
   memwalMock.rememberAndWait.mockReset();
   memwalMock.create.mockClear();
   memwalMock.created.length = 0;
@@ -74,7 +76,11 @@ describe("writeMemory", () => {
       expect(memwalMock.created[0]?.destroy).toHaveBeenCalledTimes(1);
       expect(memwalMock.rememberAndWait).toHaveBeenCalledTimes(2);
       for (const call of memwalMock.rememberAndWait.mock.calls) {
-        expect(call[2]).toMatchObject({ idempotencyKey: "claim:1", timeoutMs: 180_000 });
+        expect(call[2]).toMatchObject({
+          idempotencyKey: "claim:1",
+          timeoutMs: 180_000,
+          pollIntervalMs: REMEMBER_POLL_INTERVAL_MS,
+        });
       }
     } finally {
       globalThis.fetch = realFetch;
@@ -88,5 +94,54 @@ describe("writeMemory", () => {
     expect(memwalMock.rememberAndWait).toHaveBeenCalledTimes(1);
     expect(memwalMock.create).toHaveBeenCalledTimes(1);
     expect(memwalMock.created[0]?.destroy).not.toHaveBeenCalled();
+  });
+
+  it("waits at least a minute after a 429 and does not retry an idempotency 409", async () => {
+    allowClient();
+    const delays: number[] = [];
+    const rateLimited = Object.assign(
+      new Error('Walrus Memory server error (429): {"retry_after_seconds":60}'),
+      { status: 429, retryAfterSeconds: 60, cause: '{"retry_after_seconds":60}' },
+    );
+    memwalMock.rememberAndWait.mockRejectedValueOnce(rateLimited);
+    memwalMock.rememberAndWait.mockResolvedValueOnce({
+      id: "job-1",
+      blob_id: "blob-1",
+      owner: "owner",
+      namespace: "walkback.claim",
+    });
+    const result = await writeMemory(write, {
+      ...fast,
+      attempts: 2,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    expect(result.blobId).toBe("blob-1");
+    expect(delays[0]).toBeGreaterThanOrEqual(60_000);
+    expect(memwalMock.rememberAndWait).toHaveBeenCalledTimes(2);
+
+    memwalMock.rememberAndWait.mockReset();
+    memwalWriteLimiter.fill();
+    const conflict = Object.assign(
+      new Error(
+        'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
+      ),
+      { status: 409 },
+    );
+    memwalMock.rememberAndWait.mockRejectedValueOnce(conflict);
+    await expect(
+      writeMemory(write, {
+        ...fast,
+        attempts: 3,
+        sleep: async () => {
+          delays.push(-1);
+        },
+      }),
+    ).rejects.toThrow(
+      /different content/,
+    );
+    expect(memwalMock.rememberAndWait).toHaveBeenCalledTimes(1);
+    expect(delays).not.toContain(-1);
   });
 });

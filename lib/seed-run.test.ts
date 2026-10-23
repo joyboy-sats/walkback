@@ -218,6 +218,91 @@ describe("runSeed", () => {
     expect(result.summary).toContain("status     incomplete");
     expect(lines.some((line) => line.includes("aborting before Tatum"))).toBe(true);
     expect(lines.some((line) => line.includes("expected 500 credits"))).toBe(true);
+  });
+
+  it("logs the handle, verdict, and reason, and budgets 0 credits for a settled claim", async () => {
+    const settled = post("post-a", "alpha");
+    settled.published_at = "2026-09-20T00:00:00.000Z";
+    settled.claims = [
+      {
+        quote: "SUI will trade above 2 USD.",
+        claim_type: "price_threshold",
+        params: { symbol: "SUI", quote: "USD", direction: "gte", amount: "2", evaluation: "touch" },
+        deadline: "2026-10-01T00:00:00.000Z",
+        deadline_basis: "stated in post",
+        confidence: 0.8,
+      },
+    ];
+    dbState.getDb.mockReturnValue({
+      select(shape: Record<string, unknown>) {
+        const keys = Object.keys(shape);
+        return {
+          from() {
+            if (keys.includes("externalId")) {
+              return Promise.resolve([{ externalId: "post:post-a:0", status: "resolved" }]);
+            }
+            if (keys.includes("namespace")) {
+              return Promise.resolve([{ namespace: "walkback.claim", blobId: "blob-1" }]);
+            }
+            if (keys.includes("handle")) {
+              return Promise.resolve([{ handle: "alpha", score: 0.5, hits: 1, misses: 0 }]);
+            }
+            return Promise.resolve([{ synthetic: false }]);
+          },
+        };
+      },
+    });
+    resolveMocks.resolveDueClaims.mockImplementation(
+      async (
+        _now: Date,
+        _limit: number,
+        hooks?: {
+          onList?: (ids: string[]) => void;
+          onClaimLoaded?: (claim: { claimId: string; handle: string; externalId: string | null }) => void;
+          onClaimDone?: (
+            report: {
+              claimId: string;
+              handle: string;
+              externalId: string | null;
+              outcome: string;
+              reason: string;
+              skipped?: string;
+            },
+            elapsedMs: number,
+          ) => void;
+        },
+      ) => {
+        hooks?.onList?.(["b3cfb240-691d-826f-72e1-1695f7e46335"]);
+        hooks?.onClaimLoaded?.({
+          claimId: "b3cfb240-691d-826f-72e1-1695f7e46335",
+          handle: "mrcamerontrader",
+          externalId: "post:x-mrcamerontrader-2107077951863099625:0",
+        });
+        hooks?.onClaimDone?.(
+          {
+            claimId: "b3cfb240-691d-826f-72e1-1695f7e46335",
+            handle: "mrcamerontrader",
+            externalId: "post:x-mrcamerontrader-2107077951863099625:0",
+            outcome: "false",
+            reason: "window high 1.07 never reached 1.29",
+            skipped: "adopted stored resolution",
+          },
+          15,
+        );
+        return { reports: [], errors: [] };
+      },
+    );
+    const lines: string[] = [];
+    const result = await runSeed(
+      { posts: [settled] },
+      { log: (line) => lines.push(line), now: new Date("2026-10-23T00:00:00.000Z") },
+    );
+    expect(result.ok).toBe(true);
+    expect(lines.some((line) => line.includes("expected 0 credits"))).toBe(true);
+    expect(lines.some((line) => line.includes("mrcamerontrader"))).toBe(true);
+    expect(lines.some((line) => line.includes("false"))).toBe(true);
+    expect(lines.some((line) => line.includes("window high 1.07 never reached 1.29"))).toBe(true);
+    expect(lines.some((line) => line.includes("adopted stored resolution"))).toBe(true);
     expect(lines.some((line) => line.includes("tatum OHLCV observed this run: 0 single"))).toBe(true);
   });
 

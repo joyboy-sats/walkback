@@ -141,19 +141,21 @@ export function resolutionMemory(
   opts?: { revision?: number; resolvedAt?: string },
 ): { text: string; key: string } {
   const revision = opts?.revision ?? 1;
-  const moved =
-    score.before.score !== score.after.score
-      ? `Trust moved ${score.before.score.toFixed(2)} → ${score.after.score.toFixed(2)} ` +
-        `(${score.after.hits} hits / ${score.after.misses} misses across ` +
-        `${score.after.adjudicated} adjudicated claims).`
-      : score.after.adjudicated === 0
-        ? `No adjudicated claims yet, so trust is unchanged.`
-        : `Trust unchanged at ${score.after.score.toFixed(2)}.`;
 
   const verdictLine =
     r.outcome === "void"
       ? `VOID — could not check. This tells us nothing about the source's honesty and does not move its score.`
       : `VERDICT: ${r.outcome.toUpperCase()}.`;
+
+  // The idempotency key is the claim and the revision. The bytes have to be
+  // the same on every retry, or the relayer answers 409 ("already used for a
+  // request with different content") and the claim stays pending forever.
+  // The clock and the live score both change between a worker pass and a
+  // seed pass, so neither is part of this memory. The score memory records
+  // the bound. `score` and `resolvedAt` stay on the signature so older
+  // callers still compile; they are not written.
+  void score;
+  void opts?.resolvedAt;
 
   return {
     // Revision 1 keeps the original key so a retry of the first resolution
@@ -162,9 +164,8 @@ export function resolutionMemory(
     key: revision <= 1 ? `resolution:${r.claimId}` : `resolution:${r.claimId}:r${revision}`,
     text:
       `[RESOLUTION] ${r.sourceHandle} claimed "${clip(r.quote, 120)}" ` +
-      `(${r.claimType}, resolved ${new Date().toISOString().slice(0, 10)}). ` +
-      `${verdictLine} ${r.reason} ` +
-      `${r.outcome !== "void" ? moved : ""}\n\n` +
+      `(${r.claimType}). ` +
+      `${verdictLine} ${r.reason}\n\n` +
       payload({
         kind: "resolution",
         claim_id: r.claimId,
@@ -172,13 +173,8 @@ export function resolutionMemory(
         claim_type: r.claimType,
         outcome: r.outcome,
         reason: r.reason,
-        hits: score.after.hits,
-        misses: score.after.misses,
-        score_before: score.before.score,
-        score_after: score.after.score,
         evidence: r.evidence,
         ...(revision > 1 ? { revision } : {}),
-        ...(opts?.resolvedAt ? { resolved_at: opts.resolvedAt } : {}),
       }),
   };
 }

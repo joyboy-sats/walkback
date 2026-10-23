@@ -138,7 +138,9 @@ an already-seeded file observes 0.
 
 Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
-exceed the 30 points/min delegate limit; `memwalWriteLimiter` handles it.
+exceed the 60 weighted-request/min delegate limit (status polls count);
+`memwalWriteLimiter` charges 6 per write against a budget of 30 weighted
+requests per minute per process.
 
 Postgres is Coolify-internal. Run the seed in the worker container's terminal
 after the image that contains this file is deployed. Boot applies migrations.
