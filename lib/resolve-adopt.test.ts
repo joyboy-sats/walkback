@@ -202,14 +202,14 @@ describe("resolveClaim adoption", () => {
     expect(inserts).toHaveLength(0);
   });
 
-  it("on a 409 adopts the stored verdict and does not send a second resolution body", async () => {
+  it("on a 409 adopts the stored verdict only when it matches, and does not send a second resolution body", async () => {
     let resolutionReads = 0;
     memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
       if (args.namespace !== "walkback.resolution") return [];
       resolutionReads += 1;
       return resolutionReads === 1 ? [] : [hit("false")];
     });
-    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    adjudicateMock.mockResolvedValue({ outcome: "false", reason: "stored reason", evidence: { windowHigh: "1.07" } });
     const conflict = Object.assign(
       new Error(
         'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
@@ -234,6 +234,25 @@ describe("resolveClaim adoption", () => {
     );
     expect(keys.filter((key) => key.startsWith("resolution:"))).toEqual([`resolution:${CLAIM_ID}`]);
     expect(keys.filter((key) => key.startsWith("score:")).length).toBeGreaterThan(0);
+  });
+
+  it("does not treat a 409 as already written when the stored verdict differs", async () => {
+    let resolutionReads = 0;
+    memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
+      if (args.namespace !== "walkback.resolution") return [];
+      resolutionReads += 1;
+      return resolutionReads === 1 ? [] : [hit("false")];
+    });
+    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    const conflict = Object.assign(
+      new Error(
+        'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
+      ),
+      { status: 409 },
+    );
+    memwalMock.writeMemoriesDurable.mockResolvedValue({ error: conflict.message, cause: conflict });
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/does not match this verdict/);
+    expect(inserts).toHaveLength(0);
   });
 
   const recorded = {
@@ -305,7 +324,7 @@ describe("resolveClaim adoption", () => {
     expect(updates.some((values) => values.walrusBlobId === "blob-old" && values.reason === "stored reason")).toBe(true);
   });
 
-  it("on a 409 while repairing, adopts the stored memory instead of retrying", async () => {
+  it("on a 409 while repairing, refuses a stored memory that does not match the recorded verdict", async () => {
     state.resolutions = [{ ...recorded }];
     let resolutionReads = 0;
     memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
@@ -332,11 +351,9 @@ describe("resolveClaim adoption", () => {
         return {};
       },
     );
-    const report = await resolveClaim(CLAIM_ID);
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/does not match this verdict/);
     expect(adjudicateMock).not.toHaveBeenCalled();
-    expect(report.outcome).toBe("false");
-    expect(report.reason).toBe("stored reason");
-    expect(report.skipped).toBe("adopted stored resolution");
+    expect(inserts.filter((row) => row.values.claimId === CLAIM_ID)).toHaveLength(0);
     const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
       (call[0] as Array<{ idempotencyKey: string }>)
         .map((write) => write.idempotencyKey)

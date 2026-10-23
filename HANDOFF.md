@@ -143,8 +143,12 @@ spent. A second run of an already-seeded file observes 0.
 Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
 exceed the 60 weighted-request/min delegate limit (status polls count);
-`memwalWriteLimiter` charges 6 per write against a budget of 30 weighted
-requests per minute per process.
+`memwalWriteLimiter` charges 6 per write. The seed and the worker share one
+60-weighted-request window in `memwal_write_budget`, and only one
+`rememberAndWait` runs at a time across the two processes. A claim resolve
+takes `pg_try_advisory_lock` on that claim first, so the seed's resolve phase
+and the periodic resolver cannot write the same resolution key together. The
+loser logs `resolve lock held` and leaves the claim to the holder.
 
 Postgres is Coolify-internal. Run the seed in the worker container's terminal
 after the image that contains this file is deployed. Boot applies migrations.

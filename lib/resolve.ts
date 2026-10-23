@@ -26,6 +26,7 @@ import { exclusionVerdict } from "./scoring-exclusion";
 import { pendingWrites } from "./durable-writes";
 import { findPersistedKeys } from "./persisted-keys";
 import { recallMemory, writeMemoriesDurable, type MemoryWrite, type RecallHit } from "./memwal";
+import { gateClaimResolve } from "./resolve-lock";
 import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
 import { computeScore, replaceOutcome, type ScoreSnapshot } from "./score";
@@ -34,6 +35,8 @@ import {
   resolutionRecallQuery,
   scoreIdempotencyKey,
   scoreRecallQuery,
+  resolutionContentMatches,
+  scoreContentMatches,
   selectStoredResolution,
   selectStoredResolutionForBlob,
   selectStoredScore,
@@ -106,6 +109,45 @@ export interface ResolveOptions {
  * replay gets from keeping only the latest outcome.
  */
 export async function resolveClaim(
+  claimId: string,
+  now = new Date(),
+  opts: ResolveOptions = {},
+  hooks?: Pick<ResolveHooks, "onClaimLoaded">,
+): Promise<ResolveReport> {
+  return gateClaimResolve(
+    claimId,
+    () => resolveClaimBody(claimId, now, opts, hooks),
+    () => claimLockedReport(claimId),
+  );
+}
+
+/** The other process is already resolving this claim. Do not adjudicate or write. */
+async function claimLockedReport(claimId: string): Promise<ResolveReport> {
+  const [row] = await getDb()
+    .select({
+      handle: schema.sources.handle,
+      externalId: schema.claims.externalId,
+      score: schema.sources.score,
+    })
+    .from(schema.claims)
+    .innerJoin(schema.sources, eq(schema.claims.sourceId, schema.sources.id))
+    .where(eq(schema.claims.id, claimId))
+    .limit(1);
+  const context: ClaimLogContext = {
+    claimId,
+    handle: row?.handle ?? "unknown",
+    externalId: row?.externalId ?? null,
+  };
+  return skippedReport(
+    context,
+    "void",
+    "another resolver holds this claim",
+    row?.score ?? 0,
+    "resolve lock held",
+  );
+}
+
+async function resolveClaimBody(
   claimId: string,
   now = new Date(),
   opts: ResolveOptions = {},
@@ -239,6 +281,7 @@ export async function resolveClaim(
         `${context.handle} ${claim.id}${externalSuffix(context)}: ${resolutionText.key} was logged during adjudication, but recall could not read it. Claim left pending.`,
       );
     }
+    assertResolutionMatches(context, resolutionText.key, stored, verdict);
     return adoptStored(claim, source, context, stored, now);
   }
 
@@ -262,6 +305,7 @@ export async function resolveClaim(
           cause ? { cause } : undefined,
         );
       }
+      assertResolutionMatches(context, resolutionText.key, stored, verdict);
       return adoptStored(claim, source, context, stored, now);
     }
     if (conflict && scorePlan?.write && blobs.has(resolutionText.key)) {
@@ -272,6 +316,13 @@ export async function resolveClaim(
           cause ? { cause } : undefined,
         );
       }
+      assertScoreMatches(context, scorePlan.write.idempotencyKey, adopted, {
+        sourceId: source.id,
+        version: scorePlan.version,
+        hits: scorePlan.snapshot.hits,
+        misses: scorePlan.snapshot.misses,
+        triggeredByClaimId: claim.id,
+      });
       await logStoredScore(adopted);
       const committed = await commitVerdict({
         claimId: claim.id,
@@ -587,6 +638,39 @@ function memoryEvidence(evidence: unknown): Record<string, unknown> {
   return copy;
 }
 
+function assertResolutionMatches(
+  context: ClaimLogContext,
+  key: string,
+  stored: StoredResolution,
+  verdict: { outcome: Outcome; reason: string; evidence: unknown },
+): void {
+  if (
+    resolutionContentMatches(stored, {
+      claimId: context.claimId,
+      outcome: verdict.outcome,
+      reason: verdict.reason,
+      evidence: verdict.evidence,
+    })
+  ) {
+    return;
+  }
+  throw new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and the stored memory does not match this verdict (stored ${stored.outcome}: ${stored.reason}). Claim left pending.`,
+  );
+}
+
+function assertScoreMatches(
+  context: ClaimLogContext,
+  key: string,
+  stored: StoredScore,
+  expected: { sourceId: string; version: number; hits: number; misses: number; triggeredByClaimId: string | null },
+): void {
+  if (scoreContentMatches(stored, expected)) return;
+  throw new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and the stored score does not match this verdict (stored ${stored.hits}/${stored.misses} v${stored.version}). Claim left pending.`,
+  );
+}
+
 function conflictLeftPending(context: ClaimLogContext, key: string, detail: string): Error {
   return new Error(
     `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and recall could not read the stored memory. Claim left pending. ${detail}`,
@@ -727,6 +811,18 @@ async function repairRecordedResolution(
     }
     const adopted = await recallResolution(recallClaim, null, true);
     if (!adopted) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
+    if (
+      !resolutionContentMatches(adopted, {
+        claimId: claim.id,
+        outcome: existing.outcome,
+        reason: existing.reason,
+        evidence,
+      })
+    ) {
+      throw new Error(
+        `${context.handle} ${claim.id}${externalSuffix(context)}: ${key} was already used with different content, and the stored memory does not match this verdict (stored ${adopted.outcome}: ${adopted.reason}). Claim left pending.`,
+      );
+    }
     return projectStoredResolution(claim, source, context, existing, adopted, now);
   }
 
@@ -785,6 +881,13 @@ async function attachRepairScore(
     }
     const adopted = await recallScore(source.id, source.handle, claim.id);
     if (!adopted) throw conflictLeftPending(context, score.plan.write.idempotencyKey, err instanceof Error ? err.message : String(err));
+    assertScoreMatches(context, score.plan.write.idempotencyKey, adopted, {
+      sourceId: source.id,
+      version: score.plan.version,
+      hits: score.plan.snapshot.hits,
+      misses: score.plan.snapshot.misses,
+      triggeredByClaimId: claim.id,
+    });
     await logStoredScore(adopted);
     return {
       plan: {
@@ -1076,6 +1179,15 @@ async function adoptStored(
           `${context.handle} ${claim.id}${externalSuffix(context)}: score was already used with different content, and recall could not read it. Claim left pending.`,
           { cause: err },
         );
+      }
+      if (score?.write) {
+        assertScoreMatches(context, score.write.idempotencyKey, adopted, {
+          sourceId: source.id,
+          version: score.version,
+          hits: score.snapshot.hits,
+          misses: score.snapshot.misses,
+          triggeredByClaimId: claim.id,
+        });
       }
       await logStoredScore(adopted);
       score = {

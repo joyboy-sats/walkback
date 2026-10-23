@@ -2,11 +2,10 @@
  * Token-bucket rate limiter.
  *
  * The live delegate limit is 60 weighted requests per minute. A status poll
- * counts. `rememberAndWait` at a 1s poll is ~25 weighted calls for one ~24s
- * write, and the seed process does not share this bucket with the worker, so
- * the two of them trip 429 together. Each process therefore spends at most
- * half of that budget, and one write is charged for the accept plus the
- * polls a 5s interval makes over ~24s.
+ * counts. This bucket is process-local. The seed and the worker do not share
+ * it; `lib/write-budget.ts` is the shared cap, and `lib/resolve-lock.ts`
+ * holds the write turn so their polls do not stack. One write is charged for
+ * the accept plus the polls a 5s interval makes over ~24s.
  */
 
 /** Relayer budget observed in production: `delegate_key limit 60 weighted-requests/min`. */
@@ -19,8 +18,11 @@ export const MEMWAL_WEIGHTED_LIMIT_PER_MIN = 60;
  */
 export const REMEMBER_WRITE_WEIGHT = 6;
 
-/** Half the server budget, so a seed and a worker can write at the same time. */
-export const MEMWAL_WRITE_PROCESS_BUDGET = MEMWAL_WEIGHTED_LIMIT_PER_MIN / 2;
+/**
+ * Process-local backstop, equal to the server budget. The shared row in
+ * `memwal_write_budget` is what keeps the seed and the worker together under 60.
+ */
+export const MEMWAL_WRITE_PROCESS_BUDGET = MEMWAL_WEIGHTED_LIMIT_PER_MIN;
 
 /** Status interval passed to `rememberAndWait`. Five seconds, not one. */
 export const REMEMBER_POLL_INTERVAL_MS = 5_000;
@@ -123,7 +125,7 @@ export class RateLimiter {
 }
 
 /**
- * The one limiter every Walrus Memory write must pass through.
+ * Process-local backstop. Cross-process pacing is `acquireSharedWriteBudget`.
  *
  * A single `recall` or `listNamespaces` call is not gated. Paging the owner
  * inventory and then recalling each product namespace is many calls, so that

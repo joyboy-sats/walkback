@@ -189,6 +189,60 @@ export function selectStoredScore(
   return matches[0] ?? null;
 }
 
+const EVIDENCE_CLOCK_KEYS = new Set([
+  "resolvedAt",
+  "resolved_at",
+  "revision",
+  "score_before",
+  "score_after",
+  "hits",
+  "misses",
+  "score",
+]);
+
+/** Evidence with the clock and score fields removed, keys sorted. Those fields are why two resolvers 409. */
+export function comparableEvidence(evidence: unknown): string {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return JSON.stringify(evidence ?? null);
+  }
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(evidence as Record<string, unknown>).sort()) {
+    if (EVIDENCE_CLOCK_KEYS.has(key)) continue;
+    copy[key] = (evidence as Record<string, unknown>)[key];
+  }
+  return JSON.stringify(copy);
+}
+
+/**
+ * A 409 is "already written" only when the stored memory is this verdict.
+ * Same claim, outcome, reason, and candle evidence. A different verdict is a
+ * conflict, not a success.
+ */
+export function resolutionContentMatches(
+  stored: { claimId: string; outcome: string; reason: string; evidence: Record<string, unknown> },
+  expected: { claimId: string; outcome: string; reason: string; evidence: unknown },
+): boolean {
+  return (
+    stored.claimId === expected.claimId &&
+    stored.outcome === expected.outcome &&
+    stored.reason === expected.reason &&
+    comparableEvidence(stored.evidence) === comparableEvidence(expected.evidence)
+  );
+}
+
+export function scoreContentMatches(
+  stored: { sourceId: string; version: number; hits: number; misses: number; triggeredByClaimId: string | null },
+  expected: { sourceId: string; version: number; hits: number; misses: number; triggeredByClaimId: string | null },
+): boolean {
+  return (
+    stored.sourceId === expected.sourceId &&
+    stored.version === expected.version &&
+    stored.hits === expected.hits &&
+    stored.misses === expected.misses &&
+    stored.triggeredByClaimId === expected.triggeredByClaimId
+  );
+}
+
 export function formatResolveLine(report: {
   handle: string;
   claimId: string;
