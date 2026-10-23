@@ -1,8 +1,9 @@
 /**
  * Read models for the Coolify API. Selects only. Walrus writes happen in the worker.
  */
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "./db";
+import { buildLedger, type LedgerView } from "./ledger";
 import { LIST_ENUMERATION_NOTE } from "./projection-rebuild";
 import { sourceIsMuted } from "./score";
 import { explainVoidReason } from "./verdict-reason";
@@ -82,6 +83,44 @@ export async function readFeed() {
       muted: sourceIsMuted(source.muted, source.hits + source.misses),
     },
     };
+  });
+}
+
+/** Every source, plus ledger totals. Not capped the way {@link readFeed} is. */
+export async function readLedger(): Promise<LedgerView> {
+  const db = getDb();
+  const [sourceRows, claimRows, memoryRows, verifyRows] = await Promise.all([
+    db
+      .select({
+        id: schema.sources.id,
+        handle: schema.sources.handle,
+        score: schema.sources.score,
+        hits: schema.sources.hits,
+        misses: schema.sources.misses,
+        storedMuted: schema.sources.muted,
+      })
+      .from(schema.sources),
+    db
+      .select({
+        sourceId: schema.claims.sourceId,
+        claimType: schema.claims.claimType,
+        status: schema.claims.status,
+      })
+      .from(schema.claims),
+    db.select({ value: count() }).from(schema.memoryLog),
+    db
+      .select({ result: schema.ingestJobs.result })
+      .from(schema.ingestJobs)
+      .where(and(eq(schema.ingestJobs.kind, "rebuild"), eq(schema.ingestJobs.status, "done")))
+      .orderBy(desc(schema.ingestJobs.finishedAt), desc(schema.ingestJobs.createdAt))
+      .limit(1),
+  ]);
+
+  return buildLedger({
+    sources: sourceRows,
+    claims: claimRows,
+    memoryInventory: memoryRows[0]?.value ?? 0,
+    latestVerifyResult: verifyRows[0]?.result ?? null,
   });
 }
 
