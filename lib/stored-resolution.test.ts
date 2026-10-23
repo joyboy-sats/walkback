@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { resolutionMemory } from "./memory-text";
 import { computeScore } from "./score";
 import {
+  comparableEvidence,
   formatRelayerListLines,
   formatResolveLine,
   parseStoredResolution,
+  resolutionContentMatches,
   selectStoredResolution,
   selectStoredResolutionForBlob,
 } from "./stored-resolution";
@@ -115,5 +117,32 @@ describe("stored resolution", () => {
     expect(lines.join("\n")).toContain("walkback.timing 9");
     expect(lines.join("\n")).toContain("product namespaces in this list: 98");
     expect(lines.join("\n")).toMatch(/not in memory_log/);
+  });
+
+  it("treats a 409 as the same verdict only when outcome, reason, and evidence match", () => {
+    const evidence = { windowHigh: "1.2545", resolvedAt: "2026-10-23T12:19:45.000Z", revision: 1 };
+    expect(comparableEvidence(evidence)).toBe(comparableEvidence({ windowHigh: "1.2545" }));
+    const stored = {
+      claimId,
+      outcome: "false",
+      reason: "daily high 1.2545",
+      evidence,
+    };
+    expect(
+      resolutionContentMatches(stored, {
+        claimId,
+        outcome: "false",
+        reason: "daily high 1.2545",
+        evidence: { windowHigh: "1.2545" },
+      }),
+    ).toBe(true);
+    expect(
+      resolutionContentMatches(stored, {
+        claimId,
+        outcome: "true",
+        reason: "daily high 1.2545",
+        evidence: { windowHigh: "1.2545" },
+      }),
+    ).toBe(false);
   });
 });

@@ -44,13 +44,15 @@ const memwalMock = vi.hoisted(() => ({
 }));
 vi.mock("./memwal", () => memwalMock);
 
-const persistedMock = vi.hoisted(() => ({ findPersistedKeys: vi.fn(async () => new Set<string>()) }));
+const persistedMock = vi.hoisted(() => ({
+  findPersistedKeys: vi.fn(async (_writes?: readonly { idempotencyKey: string }[]) => new Set<string>()),
+}));
 vi.mock("./persisted-keys", () => persistedMock);
 
 const logMock = vi.hoisted(() => ({ logMemories: vi.fn(async () => {}) }));
 vi.mock("./memory-log", () => logMock);
 
-import { resolveClaim } from "./resolve";
+import { listLinkedResolutionIds, resolveClaim } from "./resolve";
 
 function legacy(outcome: "false" | "void"): string {
   return (
@@ -202,14 +204,14 @@ describe("resolveClaim adoption", () => {
     expect(inserts).toHaveLength(0);
   });
 
-  it("on a 409 adopts the stored verdict and does not send a second resolution body", async () => {
+  it("on a 409 adopts the stored verdict only when it matches, and does not send a second resolution body", async () => {
     let resolutionReads = 0;
     memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
       if (args.namespace !== "walkback.resolution") return [];
       resolutionReads += 1;
       return resolutionReads === 1 ? [] : [hit("false")];
     });
-    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    adjudicateMock.mockResolvedValue({ outcome: "false", reason: "stored reason", evidence: { windowHigh: "1.07" } });
     const conflict = Object.assign(
       new Error(
         'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
@@ -234,6 +236,43 @@ describe("resolveClaim adoption", () => {
     );
     expect(keys.filter((key) => key.startsWith("resolution:"))).toEqual([`resolution:${CLAIM_ID}`]);
     expect(keys.filter((key) => key.startsWith("score:")).length).toBeGreaterThan(0);
+  });
+
+  it("does not treat a 409 as already written when the stored verdict differs", async () => {
+    let resolutionReads = 0;
+    memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
+      if (args.namespace !== "walkback.resolution") return [];
+      resolutionReads += 1;
+      return resolutionReads === 1 ? [] : [hit("false")];
+    });
+    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    const conflict = Object.assign(
+      new Error(
+        'Walrus Memory server error (409): {"error":"idempotency_key was already used for a request with different content"}',
+      ),
+      { status: 409 },
+    );
+    memwalMock.writeMemoriesDurable.mockImplementation(
+      async (
+        items: Array<{ idempotencyKey: string }>,
+        onPersisted: (item: { idempotencyKey: string }, result: { blobId: string; id: string }) => Promise<void>,
+      ) => {
+        const item = items[0]!;
+        if (item.idempotencyKey.startsWith("resolution:")) return { error: conflict.message, cause: conflict };
+        await onPersisted(item, { blobId: "blob-score", id: "job-score" });
+        return {};
+      },
+    );
+    const report = await resolveClaim(CLAIM_ID);
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(report.skipped).toBe("projected stored resolution; adjudicated verdict differed");
+    expect(inserts.some((row) => row.values.outcome === "true")).toBe(false);
+    expect(inserts.some((row) => row.values.outcome === "false" && row.values.reason === "stored reason")).toBe(true);
+    const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
+      (call[0] as Array<{ idempotencyKey: string }>).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:")),
+    );
+    expect(resolutionKeys).toEqual([`resolution:${CLAIM_ID}`]);
   });
 
   const recorded = {
@@ -295,7 +334,7 @@ describe("resolveClaim adoption", () => {
     );
     const report = await resolveClaim(CLAIM_ID, new Date(), { reconcile: true });
     expect(adjudicateMock).not.toHaveBeenCalled();
-    expect(report.skipped).toBe("adopted stored resolution");
+    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
     expect(report.outcome).toBe("false");
     expect(report.reason).toBe("stored reason");
     const keys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
@@ -305,7 +344,7 @@ describe("resolveClaim adoption", () => {
     expect(updates.some((values) => values.walrusBlobId === "blob-old" && values.reason === "stored reason")).toBe(true);
   });
 
-  it("on a 409 while repairing, adopts the stored memory instead of retrying", async () => {
+  it("on a 409 while repairing, projects the stored memory and does not write a second resolution", async () => {
     state.resolutions = [{ ...recorded }];
     let resolutionReads = 0;
     memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
@@ -336,13 +375,122 @@ describe("resolveClaim adoption", () => {
     expect(adjudicateMock).not.toHaveBeenCalled();
     expect(report.outcome).toBe("false");
     expect(report.reason).toBe("stored reason");
-    expect(report.skipped).toBe("adopted stored resolution");
+    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
+    expect(updates.some((values) => values.reason === "stored reason" && values.walrusBlobId === "blob-old")).toBe(true);
     const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
       (call[0] as Array<{ idempotencyKey: string }>)
         .map((write) => write.idempotencyKey)
         .filter((key) => key.startsWith("resolution:")),
     );
     expect(resolutionKeys).toEqual([`resolution:${CLAIM_ID}`]);
+  });
+
+  it("does not report a linked resolution as resolved when recall cannot read it", async () => {
+    state.resolutions = [{ ...recorded, walrusBlobId: "blob-logged" }];
+    memwalMock.recallMemory.mockResolvedValue([]);
+    await expect(resolveClaim(CLAIM_ID, new Date(), { reconcile: true })).rejects.toThrow(/was not treated as the Walrus memory/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it("projects a logged resolution instead of committing the verdict it skipped writing", async () => {
+    let resolutionReads = 0;
+    memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) => {
+      if (args.namespace !== "walkback.resolution") return [];
+      resolutionReads += 1;
+      return resolutionReads === 1 ? [] : [hit("false")];
+    });
+    persistedMock.findPersistedKeys.mockImplementation(async (writes) => {
+      const keys = (writes ?? []).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:"));
+      return new Set(keys);
+    });
+    adjudicateMock.mockResolvedValue({ outcome: "true", reason: "fresh read", evidence: { fresh: true } });
+    memwalMock.writeMemoriesDurable.mockImplementation(
+      async (
+        items: Array<{ idempotencyKey: string }>,
+        onPersisted: (item: { idempotencyKey: string }, result: { blobId: string; id: string }) => Promise<void>,
+      ) => {
+        const item = items[0]!;
+        await onPersisted(item, { blobId: "blob-score", id: "job-score" });
+        return {};
+      },
+    );
+    const report = await resolveClaim(CLAIM_ID);
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(report.skipped).toBe("projected stored resolution; adjudicated verdict differed");
+    expect(inserts.some((row) => row.values.outcome === "true")).toBe(false);
+    const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
+      (call[0] as Array<{ idempotencyKey: string }>).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:")),
+    );
+    expect(resolutionKeys).toEqual([]);
+  });
+
+  it("does not roll a recorded r2 back to an r1-only recall, and does not write a score", async () => {
+    state.resolutions = [
+      {
+        ...recorded,
+        outcome: "true",
+        reason: "second pass",
+        evidence: { revision: 2, windowHigh: "1.40" },
+        walrusBlobId: "blob-r2",
+      },
+    ];
+    memwalMock.recallMemory.mockResolvedValue([hit("false", "blob-r2")]);
+    await expect(resolveClaim(CLAIM_ID, new Date(), { reconcile: true })).rejects.toThrow(
+      /older than recorded revision 2/,
+    );
+    expect(memwalMock.recallMemory.mock.calls.length).toBeGreaterThan(1);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(logMock.logMemories).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+    expect(adjudicateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not write a new body when an unlinked r2 only recalls r1", async () => {
+    state.resolutions = [
+      {
+        ...recorded,
+        outcome: "true",
+        reason: "second pass",
+        evidence: { revision: 2, windowHigh: "1.40" },
+        walrusBlobId: null,
+      },
+    ];
+    memwalMock.recallMemory.mockResolvedValue([hit("false", "blob-r1")]);
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/older than recorded revision 2/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("surfaces a recall 429 instead of writing the recorded verdict", async () => {
+    state.resolutions = [{ ...recorded }];
+    memwalMock.recallMemory.mockRejectedValue(
+      Object.assign(new Error("Walrus Memory server error (429): rate limited"), { status: 429 }),
+    );
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/429/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("lists each linked claim id once", async () => {
+    const limit = vi.fn(async () => [{ id: CLAIM_ID }]);
+    const chain = {
+      from: () => chain,
+      where: () => chain,
+      limit,
+    };
+    const selectDistinct = vi.fn(() => chain);
+    const select = vi.fn(() => {
+      throw new Error("listLinkedResolutionIds must use distinct");
+    });
+    dbState.getDb.mockReturnValueOnce({ selectDistinct, select });
+    await expect(listLinkedResolutionIds()).resolves.toEqual([CLAIM_ID]);
+    expect(selectDistinct).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
   });
 
   it("parks a repair 409 that recall cannot read", async () => {

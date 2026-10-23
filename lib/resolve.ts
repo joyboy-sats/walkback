@@ -26,6 +26,7 @@ import { exclusionVerdict } from "./scoring-exclusion";
 import { pendingWrites } from "./durable-writes";
 import { findPersistedKeys } from "./persisted-keys";
 import { recallMemory, writeMemoriesDurable, type MemoryWrite, type RecallHit } from "./memwal";
+import { gateClaimResolve } from "./resolve-lock";
 import { logMemories } from "./memory-log";
 import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
 import { computeScore, replaceOutcome, type ScoreSnapshot } from "./score";
@@ -34,6 +35,8 @@ import {
   resolutionRecallQuery,
   scoreIdempotencyKey,
   scoreRecallQuery,
+  resolutionContentMatches,
+  scoreContentMatches,
   selectStoredResolution,
   selectStoredResolutionForBlob,
   selectStoredScore,
@@ -106,6 +109,45 @@ export interface ResolveOptions {
  * replay gets from keeping only the latest outcome.
  */
 export async function resolveClaim(
+  claimId: string,
+  now = new Date(),
+  opts: ResolveOptions = {},
+  hooks?: Pick<ResolveHooks, "onClaimLoaded">,
+): Promise<ResolveReport> {
+  return gateClaimResolve(
+    claimId,
+    () => resolveClaimBody(claimId, now, opts, hooks),
+    () => claimLockedReport(claimId),
+  );
+}
+
+/** The other process is already resolving this claim. Do not adjudicate or write. */
+async function claimLockedReport(claimId: string): Promise<ResolveReport> {
+  const [row] = await getDb()
+    .select({
+      handle: schema.sources.handle,
+      externalId: schema.claims.externalId,
+      score: schema.sources.score,
+    })
+    .from(schema.claims)
+    .innerJoin(schema.sources, eq(schema.claims.sourceId, schema.sources.id))
+    .where(eq(schema.claims.id, claimId))
+    .limit(1);
+  const context: ClaimLogContext = {
+    claimId,
+    handle: row?.handle ?? "unknown",
+    externalId: row?.externalId ?? null,
+  };
+  return skippedReport(
+    context,
+    "void",
+    "another resolver holds this claim",
+    row?.score ?? 0,
+    "resolve lock held",
+  );
+}
+
+async function resolveClaimBody(
   claimId: string,
   now = new Date(),
   opts: ResolveOptions = {},
@@ -239,7 +281,9 @@ export async function resolveClaim(
         `${context.handle} ${claim.id}${externalSuffix(context)}: ${resolutionText.key} was logged during adjudication, but recall could not read it. Claim left pending.`,
       );
     }
-    return adoptStored(claim, source, context, stored, now);
+    const disagreed = !verdictMatches(stored, claim.id, verdict);
+    if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
+    return adoptStored(claim, source, context, stored, now, disagreed);
   }
 
   const pending = pendingWrites(writes, known);
@@ -262,7 +306,9 @@ export async function resolveClaim(
           cause ? { cause } : undefined,
         );
       }
-      return adoptStored(claim, source, context, stored, now);
+      const disagreed = !verdictMatches(stored, claim.id, verdict);
+      if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
+      return adoptStored(claim, source, context, stored, now, disagreed);
     }
     if (conflict && scorePlan?.write && blobs.has(resolutionText.key)) {
       const adopted = await recallScore(source.id, source.handle, claim.id);
@@ -272,6 +318,13 @@ export async function resolveClaim(
           cause ? { cause } : undefined,
         );
       }
+      assertScoreMatches(context, scorePlan.write.idempotencyKey, adopted, {
+        sourceId: source.id,
+        version: scorePlan.version,
+        hits: scorePlan.snapshot.hits,
+        misses: scorePlan.snapshot.misses,
+        triggeredByClaimId: claim.id,
+      });
       await logStoredScore(adopted);
       const committed = await commitVerdict({
         claimId: claim.id,
@@ -367,10 +420,13 @@ export async function listUnlinkedResolutionIds(limit = 200): Promise<string[]> 
   return rows.map((row) => row.id);
 }
 
-/** Resolutions that already name a blob. Seed reconciles these once per run. */
+/**
+ * Resolutions that already name a blob. Seed reconciles these once per run.
+ * A superseded claim can have more than one row; each claim is listed once.
+ */
 export async function listLinkedResolutionIds(limit = 500): Promise<string[]> {
   const rows = await getDb()
-    .select({ id: schema.resolutions.claimId })
+    .selectDistinct({ id: schema.resolutions.claimId })
     .from(schema.resolutions)
     .where(isNotNull(schema.resolutions.walrusBlobId))
     .limit(limit);
@@ -587,6 +643,42 @@ function memoryEvidence(evidence: unknown): Record<string, unknown> {
   return copy;
 }
 
+function verdictMatches(
+  stored: StoredResolution,
+  claimId: string,
+  verdict: { outcome: Outcome; reason: string; evidence: unknown },
+): boolean {
+  return resolutionContentMatches(stored, {
+    claimId,
+    outcome: verdict.outcome,
+    reason: verdict.reason,
+    evidence: verdict.evidence,
+  });
+}
+
+function warnResolutionDisagreement(
+  context: ClaimLogContext,
+  stored: StoredResolution,
+  recorded: { outcome: string; reason: string },
+  which: "adjudicated" | "recorded",
+): void {
+  console.warn(
+    `[resolve] ${context.handle} ${context.claimId}${externalSuffix(context)}: Walrus ${resolutionIdempotencyKey(context.claimId, stored.revision)} is ${stored.outcome} (${stored.reason}). The ${which} verdict was ${recorded.outcome} (${recorded.reason}). Postgres will follow the stored memory.`,
+  );
+}
+
+function assertScoreMatches(
+  context: ClaimLogContext,
+  key: string,
+  stored: StoredScore,
+  expected: { sourceId: string; version: number; hits: number; misses: number; triggeredByClaimId: string | null },
+): void {
+  if (scoreContentMatches(stored, expected)) return;
+  throw new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and the stored score does not match this verdict (stored ${stored.hits}/${stored.misses} v${stored.version}). Claim left pending.`,
+  );
+}
+
 function conflictLeftPending(context: ClaimLogContext, key: string, detail: string): Error {
   return new Error(
     `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and recall could not read the stored memory. Claim left pending. ${detail}`,
@@ -682,21 +774,20 @@ async function repairRecordedResolution(
   const hint = loggedBlob ?? existing.walrusBlobId;
   const recallClaim = { id: claim.id, handle: source.handle, quote: claim.quote };
   let stored = await recallResolution(recallClaim, null, false);
-  if (!stored && hint) stored = await recallResolution(recallClaim, hint, true);
+  stored = await keepCurrentRevision(stored, revision, existing.walrusBlobId, recallClaim, context);
+  if (!stored && hint) {
+    const hinted = await recallResolution(recallClaim, hint, true);
+    stored = await keepCurrentRevision(hinted, revision, existing.walrusBlobId, recallClaim, context);
+  }
 
   if (stored) return projectStoredResolution(claim, source, context, existing, stored, now);
 
   // A blob id or a log row means the key was accepted. Recall can miss a
-  // memory that is there. Writing another body is the 409. Leave the row.
+  // memory that is there. Writing another body is the 409. Do not report the
+  // recorded sentence as if it were that memory.
   if (hint) {
-    if (existing.walrusBlobId) {
-      console.warn(
-        `[resolve] ${context.handle} ${claim.id}: recall missed resolution blob ${hint}. Projection left as recorded.`,
-      );
-      return skippedReport(context, existing.outcome, existing.reason, source.score, "already resolved");
-    }
     throw new Error(
-      `${context.handle} ${claim.id}${externalSuffix(context)}: resolution ${key} is logged as blob ${hint}, but recall could not read it. Claim left pending.`,
+      `${context.handle} ${claim.id}${externalSuffix(context)}: resolution ${key} is already stored as blob ${hint}, but recall could not read it. The recorded verdict was left in place and was not treated as the Walrus memory.`,
     );
   }
 
@@ -727,7 +818,9 @@ async function repairRecordedResolution(
     }
     const adopted = await recallResolution(recallClaim, null, true);
     if (!adopted) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
-    return projectStoredResolution(claim, source, context, existing, adopted, now);
+    const current = await keepCurrentRevision(adopted, revision, existing.walrusBlobId, recallClaim, context);
+    if (!current) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
+    return projectStoredResolution(claim, source, context, existing, current, now);
   }
 
   const score = await attachRepairScore(claim, source, context, existing.outcome, existing.outcome);
@@ -785,6 +878,13 @@ async function attachRepairScore(
     }
     const adopted = await recallScore(source.id, source.handle, claim.id);
     if (!adopted) throw conflictLeftPending(context, score.plan.write.idempotencyKey, err instanceof Error ? err.message : String(err));
+    assertScoreMatches(context, score.plan.write.idempotencyKey, adopted, {
+      sourceId: source.id,
+      version: score.plan.version,
+      hits: score.plan.snapshot.hits,
+      misses: score.plan.snapshot.misses,
+      triggeredByClaimId: claim.id,
+    });
     await logStoredScore(adopted);
     return {
       plan: {
@@ -807,7 +907,17 @@ async function projectStoredResolution(
   stored: StoredResolution,
   now: Date,
 ): Promise<ResolveReport> {
-  const changed = stored.outcome !== existing.outcome || stored.reason !== existing.reason;
+  const recordedRevision = evidenceRevision(existing.evidence);
+  if (stored.revision < recordedRevision) {
+    throw olderRevisionError(context, recordedRevision, stored.revision);
+  }
+  const matches = resolutionContentMatches(stored, {
+    claimId: claim.id,
+    outcome: existing.outcome,
+    reason: existing.reason,
+    evidence: memoryEvidence(existing.evidence),
+  });
+  if (!matches) warnResolutionDisagreement(context, stored, existing, "recorded");
   await logMemories(
     [
       {
@@ -820,7 +930,7 @@ async function projectStoredResolution(
   );
   const score = await attachRepairScore(claim, source, context, existing.outcome, stored.outcome);
   const linked = existing.walrusBlobId === stored.blobId;
-  if (!changed && linked && !score.plan && !score.writtenBlob) {
+  if (matches && linked && !score.plan && !score.writtenBlob) {
     return skippedReport(context, stored.outcome, stored.reason, source.score, "already resolved");
   }
   const before = computeScore(source.hits, source.misses);
@@ -850,7 +960,7 @@ async function projectStoredResolution(
       resolution: stored.blobId,
       ...(score.writtenBlob ? { score: score.writtenBlob } : {}),
     },
-    skipped: changed ? "adopted stored resolution" : "repaired resolution link",
+    skipped: matches ? "repaired resolution link" : "projected stored resolution; recorded verdict differed",
   };
 }
 
@@ -902,13 +1012,32 @@ function scoreCommitFromStored(stored: StoredScore): ScoreCommit {
 }
 
 async function recallHits(query: string, namespace: (typeof NS)[keyof typeof NS]): Promise<RecallHit[]> {
-  try {
-    return await recallMemory({ query, namespace, limit: 20, sort: "relevance" });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[resolve] recall ${namespace} failed: ${message}`);
-    return [];
-  }
+  return recallMemory({ query, namespace, limit: 20, sort: "relevance" });
+}
+
+/**
+ * A relevance recall can surface revision 1 while revision 2 is the row.
+ * An older hit is not the recorded verdict. Retry the blob the row names.
+ * If that blob is missing or still older, this throws: no write, no projection change.
+ */
+async function keepCurrentRevision(
+  stored: StoredResolution | null,
+  revision: number,
+  blobId: string | null,
+  claim: { id: string; handle: string; quote: string },
+  context: ClaimLogContext,
+): Promise<StoredResolution | null> {
+  if (!stored) return null;
+  if (stored.revision >= revision) return stored;
+  const pinned = blobId ? await recallResolution(claim, blobId, true) : null;
+  if (pinned && pinned.revision >= revision) return pinned;
+  throw olderRevisionError(context, revision, pinned?.revision ?? stored.revision);
+}
+
+function olderRevisionError(context: ClaimLogContext, recorded: number, recalled: number): Error {
+  return new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: recall returned revision ${recalled}, which is older than recorded revision ${recorded}. The recorded verdict was left in place.`,
+  );
 }
 
 function recallTexts(hits: readonly RecallHit[]) {
@@ -1048,6 +1177,7 @@ async function adoptStored(
   context: ClaimLogContext,
   stored: StoredResolution,
   now: Date,
+  disagreed = false,
 ): Promise<ResolveReport> {
   const key = resolutionIdempotencyKey(claim.id, stored.revision);
   await logMemories(
@@ -1077,6 +1207,15 @@ async function adoptStored(
           { cause: err },
         );
       }
+      if (score?.write) {
+        assertScoreMatches(context, score.write.idempotencyKey, adopted, {
+          sourceId: source.id,
+          version: score.version,
+          hits: score.snapshot.hits,
+          misses: score.snapshot.misses,
+          triggeredByClaimId: claim.id,
+        });
+      }
       await logStoredScore(adopted);
       score = {
         adopted,
@@ -1087,7 +1226,7 @@ async function adoptStored(
     }
   }
 
-  return finishAdopt(claim, source, context, stored, now, before, score, writtenBlob);
+  return finishAdopt(claim, source, context, stored, now, before, score, writtenBlob, disagreed);
 }
 
 async function finishAdopt(
@@ -1099,6 +1238,7 @@ async function finishAdopt(
   before: ScoreSnapshot,
   score: ScorePlan | null,
   writtenBlob: string | null,
+  disagreed = false,
 ): Promise<ResolveReport> {
   const committed = await commitVerdict({
     claimId: claim.id,
@@ -1126,7 +1266,7 @@ async function finishAdopt(
       resolution: stored.blobId,
       ...(committed.scoreBlob ? { score: committed.scoreBlob } : {}),
     },
-    skipped: "adopted stored resolution",
+    skipped: disagreed ? "projected stored resolution; adjudicated verdict differed" : "adopted stored resolution",
   };
 }
 
