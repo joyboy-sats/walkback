@@ -17,7 +17,8 @@
  *      status polls count. `memwalWriteLimiter` is process-local. The shared
  *      cap is `acquireSharedWriteBudget`, and `withMemwalWriteLock` lets one
  *      `rememberAndWait` run at a time across the seed and the worker. A 429
- *      waits out `retry_after_seconds` (at least 60s).
+ *      waits out `retry_after_seconds` (at least 60s). A recall is one
+ *      weighted request on that same shared window.
  *
  * Also note: `remember` is append-only. There is no upsert, no update and no
  * delete in the public `MemWal` class (`forget`/`clear` exist only on
@@ -48,6 +49,7 @@ import {
   memwalReadLimiter,
   memwalWriteLimiter,
   RATE_LIMIT_FLOOR_MS,
+  RECALL_REQUEST_WEIGHT,
   REMEMBER_POLL_INTERVAL_MS,
   REMEMBER_WRITE_WEIGHT,
 } from "./ratelimit";
@@ -311,10 +313,12 @@ export interface RecallArgs {
  * ordering by a column and no exact match. Treat hits as evidence to be
  * re-parsed, not as rows.
  *
- * Reads are not rate-limited — they are cheap, and stalling the UI for them
- * would be pointless.
+ * Charged as one weighted request on the shared MemWal window. A failure
+ * throws. Callers must not treat that as an empty ledger and write.
  */
 export async function recallMemory(a: RecallArgs): Promise<RecallHit[]> {
+  await memwalWriteLimiter.acquire(RECALL_REQUEST_WEIGHT);
+  await acquireSharedWriteBudget(RECALL_REQUEST_WEIGHT);
   const res = await getClient().recall({
     query: a.query,
     namespace: a.namespace,

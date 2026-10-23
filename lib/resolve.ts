@@ -420,10 +420,13 @@ export async function listUnlinkedResolutionIds(limit = 200): Promise<string[]> 
   return rows.map((row) => row.id);
 }
 
-/** Resolutions that already name a blob. Seed reconciles these once per run. */
+/**
+ * Resolutions that already name a blob. Seed reconciles these once per run.
+ * A superseded claim can have more than one row; each claim is listed once.
+ */
 export async function listLinkedResolutionIds(limit = 500): Promise<string[]> {
   const rows = await getDb()
-    .select({ id: schema.resolutions.claimId })
+    .selectDistinct({ id: schema.resolutions.claimId })
     .from(schema.resolutions)
     .where(isNotNull(schema.resolutions.walrusBlobId))
     .limit(limit);
@@ -771,7 +774,11 @@ async function repairRecordedResolution(
   const hint = loggedBlob ?? existing.walrusBlobId;
   const recallClaim = { id: claim.id, handle: source.handle, quote: claim.quote };
   let stored = await recallResolution(recallClaim, null, false);
-  if (!stored && hint) stored = await recallResolution(recallClaim, hint, true);
+  stored = await keepCurrentRevision(stored, revision, existing.walrusBlobId, recallClaim, context);
+  if (!stored && hint) {
+    const hinted = await recallResolution(recallClaim, hint, true);
+    stored = await keepCurrentRevision(hinted, revision, existing.walrusBlobId, recallClaim, context);
+  }
 
   if (stored) return projectStoredResolution(claim, source, context, existing, stored, now);
 
@@ -811,7 +818,9 @@ async function repairRecordedResolution(
     }
     const adopted = await recallResolution(recallClaim, null, true);
     if (!adopted) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
-    return projectStoredResolution(claim, source, context, existing, adopted, now);
+    const current = await keepCurrentRevision(adopted, revision, existing.walrusBlobId, recallClaim, context);
+    if (!current) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
+    return projectStoredResolution(claim, source, context, existing, current, now);
   }
 
   const score = await attachRepairScore(claim, source, context, existing.outcome, existing.outcome);
@@ -898,6 +907,10 @@ async function projectStoredResolution(
   stored: StoredResolution,
   now: Date,
 ): Promise<ResolveReport> {
+  const recordedRevision = evidenceRevision(existing.evidence);
+  if (stored.revision < recordedRevision) {
+    throw olderRevisionError(context, recordedRevision, stored.revision);
+  }
   const matches = resolutionContentMatches(stored, {
     claimId: claim.id,
     outcome: existing.outcome,
@@ -999,13 +1012,32 @@ function scoreCommitFromStored(stored: StoredScore): ScoreCommit {
 }
 
 async function recallHits(query: string, namespace: (typeof NS)[keyof typeof NS]): Promise<RecallHit[]> {
-  try {
-    return await recallMemory({ query, namespace, limit: 20, sort: "relevance" });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[resolve] recall ${namespace} failed: ${message}`);
-    return [];
-  }
+  return recallMemory({ query, namespace, limit: 20, sort: "relevance" });
+}
+
+/**
+ * A relevance recall can surface revision 1 while revision 2 is the row.
+ * An older hit is not the recorded verdict. Retry the blob the row names.
+ * If that blob is missing or still older, this throws: no write, no projection change.
+ */
+async function keepCurrentRevision(
+  stored: StoredResolution | null,
+  revision: number,
+  blobId: string | null,
+  claim: { id: string; handle: string; quote: string },
+  context: ClaimLogContext,
+): Promise<StoredResolution | null> {
+  if (!stored) return null;
+  if (stored.revision >= revision) return stored;
+  const pinned = blobId ? await recallResolution(claim, blobId, true) : null;
+  if (pinned && pinned.revision >= revision) return pinned;
+  throw olderRevisionError(context, revision, pinned?.revision ?? stored.revision);
+}
+
+function olderRevisionError(context: ClaimLogContext, recorded: number, recalled: number): Error {
+  return new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: recall returned revision ${recalled}, which is older than recorded revision ${recorded}. The recorded verdict was left in place.`,
+  );
 }
 
 function recallTexts(hits: readonly RecallHit[]) {

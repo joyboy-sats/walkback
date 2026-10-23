@@ -52,7 +52,7 @@ vi.mock("./persisted-keys", () => persistedMock);
 const logMock = vi.hoisted(() => ({ logMemories: vi.fn(async () => {}) }));
 vi.mock("./memory-log", () => logMock);
 
-import { resolveClaim } from "./resolve";
+import { listLinkedResolutionIds, resolveClaim } from "./resolve";
 
 function legacy(outcome: "false" | "void"): string {
   return (
@@ -424,6 +424,73 @@ describe("resolveClaim adoption", () => {
       (call[0] as Array<{ idempotencyKey: string }>).map((write) => write.idempotencyKey).filter((key) => key.startsWith("resolution:")),
     );
     expect(resolutionKeys).toEqual([]);
+  });
+
+  it("does not roll a recorded r2 back to an r1-only recall, and does not write a score", async () => {
+    state.resolutions = [
+      {
+        ...recorded,
+        outcome: "true",
+        reason: "second pass",
+        evidence: { revision: 2, windowHigh: "1.40" },
+        walrusBlobId: "blob-r2",
+      },
+    ];
+    memwalMock.recallMemory.mockResolvedValue([hit("false", "blob-r2")]);
+    await expect(resolveClaim(CLAIM_ID, new Date(), { reconcile: true })).rejects.toThrow(
+      /older than recorded revision 2/,
+    );
+    expect(memwalMock.recallMemory.mock.calls.length).toBeGreaterThan(1);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(logMock.logMemories).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+    expect(adjudicateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not write a new body when an unlinked r2 only recalls r1", async () => {
+    state.resolutions = [
+      {
+        ...recorded,
+        outcome: "true",
+        reason: "second pass",
+        evidence: { revision: 2, windowHigh: "1.40" },
+        walrusBlobId: null,
+      },
+    ];
+    memwalMock.recallMemory.mockResolvedValue([hit("false", "blob-r1")]);
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/older than recorded revision 2/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("surfaces a recall 429 instead of writing the recorded verdict", async () => {
+    state.resolutions = [{ ...recorded }];
+    memwalMock.recallMemory.mockRejectedValue(
+      Object.assign(new Error("Walrus Memory server error (429): rate limited"), { status: 429 }),
+    );
+    await expect(resolveClaim(CLAIM_ID)).rejects.toThrow(/429/);
+    expect(memwalMock.writeMemoriesDurable).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("lists each linked claim id once", async () => {
+    const limit = vi.fn(async () => [{ id: CLAIM_ID }]);
+    const chain = {
+      from: () => chain,
+      where: () => chain,
+      limit,
+    };
+    const selectDistinct = vi.fn(() => chain);
+    const select = vi.fn(() => {
+      throw new Error("listLinkedResolutionIds must use distinct");
+    });
+    dbState.getDb.mockReturnValueOnce({ selectDistinct, select });
+    await expect(listLinkedResolutionIds()).resolves.toEqual([CLAIM_ID]);
+    expect(selectDistinct).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
   });
 
   it("parks a repair 409 that recall cannot read", async () => {
