@@ -18,7 +18,7 @@
  */
 import "server-only";
 
-import { and, desc, eq, lte } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import { adjudicate } from "./adjudicate";
 import { isIdempotencyConflict } from "./bounded";
 import { getDb, schema } from "./db";
@@ -87,6 +87,13 @@ export interface ResolveOptions {
   supersede?: boolean;
   /** Re-check a true or false verdict too. Still appends; it does not edit. */
   force?: boolean;
+  /**
+   * A resolution row already points at a blob. Read that memory and, when
+   * the stored verdict differs, project it. Does not call Tatum. Seed uses
+   * this; the periodic pass does not, so it does not recall every resolution
+   * every minute.
+   */
+  reconcile?: boolean;
 }
 
 /**
@@ -133,7 +140,14 @@ export async function resolveClaim(
     .limit(1);
 
   if (existing && !opts.supersede) {
-    return skippedReport(context, existing.outcome, existing.reason, source.score, "already resolved");
+    // A blob id means a memory was already accepted. The periodic pass leaves
+    // it alone. `reconcile` (the seed) reads it and projects Walrus when the
+    // stored verdict differs. A row with no blob is the DB-only state: repair
+    // it from the stored verdict, or from Walrus if the memory is already there.
+    if (existing.walrusBlobId && !opts.reconcile) {
+      return skippedReport(context, existing.outcome, existing.reason, source.score, "already resolved");
+    }
+    return repairRecordedResolution(claim, source, context, existing, now);
   }
   if (existing && existing.outcome !== "void" && !opts.force) {
     return skippedReport(context, existing.outcome, existing.reason, source.score, "already adjudicated");
@@ -343,6 +357,53 @@ export async function listDueClaimIds(now = new Date(), limit = 25): Promise<str
   return due.map((row) => row.id);
 }
 
+/** Resolutions the projection recorded without a Walrus blob id. */
+export async function listUnlinkedResolutionIds(limit = 200): Promise<string[]> {
+  const rows = await getDb()
+    .select({ id: schema.resolutions.claimId })
+    .from(schema.resolutions)
+    .where(isNull(schema.resolutions.walrusBlobId))
+    .limit(limit);
+  return rows.map((row) => row.id);
+}
+
+/** Resolutions that already name a blob. Seed reconciles these once per run. */
+export async function listLinkedResolutionIds(limit = 500): Promise<string[]> {
+  const rows = await getDb()
+    .select({ id: schema.resolutions.claimId })
+    .from(schema.resolutions)
+    .where(isNotNull(schema.resolutions.walrusBlobId))
+    .limit(limit);
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Write or adopt the Walrus memory for a verdict Postgres already stored.
+ * Does not call Tatum. A claim the periodic pass parked on a 409 is still
+ * repaired here, because this does not consult the backoff.
+ */
+export async function repairUnlinkedResolutions(
+  now = new Date(),
+  hooks?: ResolveHooks,
+): Promise<ResolveBatch> {
+  const ids = await listUnlinkedResolutionIds();
+  hooks?.onList?.(ids);
+  return resolveClaimsById(ids, now, hooks);
+}
+
+/**
+ * Read each linked resolution and project the stored memory when it differs.
+ * One seed run, not the 60s pass.
+ */
+export async function reconcileResolvedClaims(
+  now = new Date(),
+  hooks?: ResolveHooks,
+): Promise<ResolveBatch> {
+  const ids = await listLinkedResolutionIds();
+  hooks?.onList?.(ids);
+  return resolveClaimsById(ids, now, hooks, { reconcile: true });
+}
+
 /**
  * Resolve the given claims. A throw is recorded and the loop continues, so
  * one dead claim does not drop the rest of the batch. The claim stays
@@ -493,6 +554,304 @@ function skippedReport(
 
 function externalSuffix(context: ClaimLogContext): string {
   return context.externalId ? ` ${context.externalId}` : "";
+}
+
+interface RecordedResolution {
+  outcome: Outcome;
+  reason: string;
+  evidence: unknown;
+  walrusBlobId: string | null;
+  resolvedAt: Date;
+}
+
+interface RepairClaim {
+  id: string;
+  quote: string;
+  claimType: string;
+}
+
+interface RepairSource {
+  id: string;
+  handle: string;
+  hits: number;
+  misses: number;
+  score: number;
+}
+
+/** Evidence stored on the row, without the clock fields that made two bodies differ. */
+function memoryEvidence(evidence: unknown): Record<string, unknown> {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return {};
+  const copy = { ...(evidence as Record<string, unknown>) };
+  delete copy.resolvedAt;
+  delete copy.revision;
+  return copy;
+}
+
+function conflictLeftPending(context: ClaimLogContext, key: string, detail: string): Error {
+  return new Error(
+    `${context.handle} ${context.claimId}${externalSuffix(context)}: ${key} was already used with different content, and recall could not read the stored memory. Claim left pending. ${detail}`,
+  );
+}
+
+interface TriggeredScore {
+  version: number;
+  hits: number;
+  misses: number;
+  score: number;
+  reason: string;
+  blob: string | null;
+}
+
+async function triggeredScore(claimId: string, sourceId: string): Promise<TriggeredScore | null> {
+  const [row] = await getDb()
+    .select({
+      version: schema.scoreVersions.version,
+      score: schema.scoreVersions.score,
+      hits: schema.scoreVersions.hits,
+      misses: schema.scoreVersions.misses,
+      reason: schema.scoreVersions.reason,
+      blob: schema.scoreVersions.walrusBlobId,
+    })
+    .from(schema.scoreVersions)
+    .where(and(eq(schema.scoreVersions.triggeredByClaimId, claimId), eq(schema.scoreVersions.sourceId, sourceId)))
+    .orderBy(desc(schema.scoreVersions.version))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The resolution row means this outcome was folded into the source when a
+ * score version names the claim. A row with no score version was not folded
+ * (a void, or a commit that never reached the score). Passing the recorded
+ * outcome in that case would subtract a hit that is not there.
+ */
+async function scoreRepairPlan(
+  source: RepairSource,
+  claimId: string,
+  recordedOutcome: Outcome,
+  targetOutcome: Outcome,
+): Promise<{ plan: ScorePlan | null; stampVersion: number | null }> {
+  const triggered = await triggeredScore(claimId, source.id);
+  const previous = triggered ? recordedOutcome : null;
+  const before = computeScore(source.hits, source.misses);
+  let after: ScoreSnapshot;
+  try {
+    after = replaceOutcome(source.hits, source.misses, previous, targetOutcome);
+  } catch {
+    after = before;
+  }
+  if (after.hits !== before.hits || after.misses !== before.misses) {
+    return { plan: await scoreForVerdict(source, claimId, targetOutcome, before, after), stampVersion: null };
+  }
+  if (triggered && !triggered.blob) {
+    const snap = computeScore(triggered.hits, triggered.misses);
+    const built = scoreMemory(
+      {
+        sourceId: source.id,
+        sourceHandle: source.handle,
+        version: triggered.version,
+        triggeredByClaimId: claimId,
+        reason: triggered.reason,
+      },
+      snap,
+      null,
+    );
+    return {
+      plan: {
+        write: { text: built.text, namespace: NS.score, idempotencyKey: built.key },
+        snapshot: snap,
+        version: triggered.version,
+        reason: triggered.reason,
+      },
+      stampVersion: triggered.version,
+    };
+  }
+  return { plan: null, stampVersion: null };
+}
+
+async function repairRecordedResolution(
+  claim: RepairClaim,
+  source: RepairSource,
+  context: ClaimLogContext,
+  existing: RecordedResolution,
+  now: Date,
+): Promise<ResolveReport> {
+  const revision = evidenceRevision(existing.evidence);
+  const key = resolutionIdempotencyKey(claim.id, revision);
+  const loggedBlob = await blobForKey(key);
+  const hint = loggedBlob ?? existing.walrusBlobId;
+  const recallClaim = { id: claim.id, handle: source.handle, quote: claim.quote };
+  let stored = await recallResolution(recallClaim, null, false);
+  if (!stored && hint) stored = await recallResolution(recallClaim, hint, true);
+
+  if (stored) return projectStoredResolution(claim, source, context, existing, stored, now);
+
+  // A blob id or a log row means the key was accepted. Recall can miss a
+  // memory that is there. Writing another body is the 409. Leave the row.
+  if (hint) {
+    if (existing.walrusBlobId) {
+      console.warn(
+        `[resolve] ${context.handle} ${claim.id}: recall missed resolution blob ${hint}. Projection left as recorded.`,
+      );
+      return skippedReport(context, existing.outcome, existing.reason, source.score, "already resolved");
+    }
+    throw new Error(
+      `${context.handle} ${claim.id}${externalSuffix(context)}: resolution ${key} is logged as blob ${hint}, but recall could not read it. Claim left pending.`,
+    );
+  }
+
+  const evidence = memoryEvidence(existing.evidence);
+  const resolutionText = resolutionMemory(
+    {
+      claimId: claim.id,
+      sourceHandle: source.handle,
+      claimType: claim.claimType as ClaimType,
+      quote: claim.quote,
+      outcome: existing.outcome,
+      reason: existing.reason,
+      evidence,
+    },
+    { before: computeScore(source.hits, source.misses), after: computeScore(source.hits, source.misses) },
+    { revision },
+  );
+  let resolutionBlob: string;
+  try {
+    resolutionBlob = (await writeOne({ text: resolutionText.text, namespace: NS.resolution, idempotencyKey: key })).blobId;
+  } catch (err) {
+    if (!isIdempotencyConflict(err)) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `${context.handle} ${claim.id}${externalSuffix(context)}: failed to persist the recorded resolution: ${message}`,
+        { cause: err },
+      );
+    }
+    const adopted = await recallResolution(recallClaim, null, true);
+    if (!adopted) throw conflictLeftPending(context, key, err instanceof Error ? err.message : String(err));
+    return projectStoredResolution(claim, source, context, existing, adopted, now);
+  }
+
+  const score = await attachRepairScore(claim, source, context, existing.outcome, existing.outcome);
+  const before = computeScore(source.hits, source.misses);
+  const committed = await commitVerdict({
+    claimId: claim.id,
+    sourceId: source.id,
+    existing: true,
+    supersede: false,
+    relink: true,
+    outcome: existing.outcome,
+    reason: existing.reason,
+    evidence: resolutionEvidence(evidence, revision, existing.resolvedAt.toISOString()),
+    resolvedAt: existing.resolvedAt,
+    resolutionBlob,
+    score: score.plan && score.stampVersion === null ? scoreCommit(claim.id, score.plan, score.writtenBlob) : null,
+    stampScore: score.stampVersion !== null && score.writtenBlob ? { version: score.stampVersion, blobId: score.writtenBlob } : null,
+    fallbackScore: before.score,
+  });
+  return {
+    ...context,
+    outcome: existing.outcome,
+    reason: existing.reason,
+    scoreBefore: before.score,
+    scoreAfter: committed.scoreAfter,
+    blobs: {
+      resolution: resolutionBlob,
+      ...(score.writtenBlob ? { score: score.writtenBlob } : {}),
+    },
+    skipped: "repaired resolution memory",
+  };
+}
+
+async function attachRepairScore(
+  claim: RepairClaim,
+  source: RepairSource,
+  context: ClaimLogContext,
+  recordedOutcome: Outcome,
+  targetOutcome: Outcome,
+): Promise<{ plan: ScorePlan | null; stampVersion: number | null; writtenBlob: string | null }> {
+  const score = await scoreRepairPlan(source, claim.id, recordedOutcome, targetOutcome);
+  if (!score.plan?.write) {
+    return { plan: score.plan, stampVersion: score.stampVersion, writtenBlob: score.plan?.adopted?.blobId ?? null };
+  }
+  try {
+    const written = await writeOne(score.plan.write);
+    return { plan: score.plan, stampVersion: score.stampVersion, writtenBlob: written.blobId };
+  } catch (err) {
+    if (!isIdempotencyConflict(err)) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `${context.handle} ${claim.id}${externalSuffix(context)}: failed to persist the score for the recorded resolution: ${message}`,
+        { cause: err },
+      );
+    }
+    const adopted = await recallScore(source.id, source.handle, claim.id);
+    if (!adopted) throw conflictLeftPending(context, score.plan.write.idempotencyKey, err instanceof Error ? err.message : String(err));
+    await logStoredScore(adopted);
+    return {
+      plan: {
+        adopted,
+        snapshot: computeScore(adopted.hits, adopted.misses),
+        version: adopted.version,
+        reason: adopted.reason,
+      },
+      stampVersion: score.stampVersion,
+      writtenBlob: adopted.blobId,
+    };
+  }
+}
+
+async function projectStoredResolution(
+  claim: RepairClaim,
+  source: RepairSource,
+  context: ClaimLogContext,
+  existing: RecordedResolution,
+  stored: StoredResolution,
+  now: Date,
+): Promise<ResolveReport> {
+  const changed = stored.outcome !== existing.outcome || stored.reason !== existing.reason;
+  await logMemories(
+    [
+      {
+        text: stored.text,
+        namespace: NS.resolution,
+        idempotencyKey: resolutionIdempotencyKey(claim.id, stored.revision),
+      },
+    ],
+    [{ blobId: stored.blobId, namespace: NS.resolution }],
+  );
+  const score = await attachRepairScore(claim, source, context, existing.outcome, stored.outcome);
+  const linked = existing.walrusBlobId === stored.blobId;
+  if (!changed && linked && !score.plan && !score.writtenBlob) {
+    return skippedReport(context, stored.outcome, stored.reason, source.score, "already resolved");
+  }
+  const before = computeScore(source.hits, source.misses);
+  const committed = await commitVerdict({
+    claimId: claim.id,
+    sourceId: source.id,
+    existing: true,
+    supersede: false,
+    relink: true,
+    outcome: stored.outcome,
+    reason: stored.reason,
+    evidence: evidenceFromStored(stored),
+    resolvedAt: storedResolvedAt(stored, existing.resolvedAt ?? now),
+    resolutionBlob: stored.blobId,
+    score: score.plan && score.stampVersion === null ? scoreCommit(claim.id, score.plan, score.writtenBlob) : null,
+    stampScore:
+      score.stampVersion !== null && score.writtenBlob ? { version: score.stampVersion, blobId: score.writtenBlob } : null,
+    fallbackScore: before.score,
+  });
+  return {
+    ...context,
+    outcome: stored.outcome,
+    reason: stored.reason,
+    scoreBefore: before.score,
+    scoreAfter: committed.scoreAfter,
+    blobs: {
+      resolution: stored.blobId,
+      ...(score.writtenBlob ? { score: score.writtenBlob } : {}),
+    },
+    skipped: changed ? "adopted stored resolution" : "repaired resolution link",
+  };
 }
 
 interface ScorePlan {
@@ -784,6 +1143,13 @@ interface CommitInput {
   score: ScoreCommit | null;
   /** Score to report when this verdict does not write a score version. */
   fallbackScore: number;
+  /**
+   * The resolution row is already there. Update it to this verdict and blob
+   * instead of treating the row as "done" and returning.
+   */
+  relink?: boolean;
+  /** Stamp a score version that already exists. Does not insert another. */
+  stampScore?: { version: number; blobId: string } | null;
 }
 
 interface CommitResult {
@@ -809,7 +1175,7 @@ async function commitVerdict(input: CommitInput): Promise<CommitResult> {
       .from(schema.resolutions)
       .where(eq(schema.resolutions.claimId, input.claimId))
       .limit(1);
-    if (already && !input.supersede) {
+    if (already && !input.supersede && !input.relink) {
       skipped[0] = { outcome: already.outcome, reason: already.reason };
       return;
     }
@@ -817,7 +1183,7 @@ async function commitVerdict(input: CommitInput): Promise<CommitResult> {
       outcome: input.outcome,
       evidence: input.evidence,
       reason: input.reason,
-      resolvedAt: input.resolvedAt,
+      resolvedAt: input.relink ? already?.resolvedAt ?? input.resolvedAt : input.resolvedAt,
       walrusBlobId: input.resolutionBlob,
     };
     if (already) {
@@ -829,7 +1195,18 @@ async function commitVerdict(input: CommitInput): Promise<CommitResult> {
       .update(schema.claims)
       .set({ status: input.outcome === "void" ? "void" : "resolved" })
       .where(eq(schema.claims.id, input.claimId));
-    if (input.score) {
+    if (input.stampScore) {
+      await tx
+        .update(schema.scoreVersions)
+        .set({ walrusBlobId: input.stampScore.blobId })
+        .where(
+          and(
+            eq(schema.scoreVersions.sourceId, input.sourceId),
+            eq(schema.scoreVersions.version, input.stampScore.version),
+          ),
+        );
+    }
+    if (input.score && !input.stampScore) {
       await tx.insert(schema.scoreVersions).values({
         sourceId: input.sourceId,
         version: input.score.version,

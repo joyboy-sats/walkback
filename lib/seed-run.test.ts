@@ -28,6 +28,8 @@ vi.mock("./ingest", () => ingestMocks);
 
 const resolveMocks = vi.hoisted(() => ({
   resolveDueClaims: vi.fn(),
+  repairUnlinkedResolutions: vi.fn(),
+  reconcileResolvedClaims: vi.fn(),
 }));
 
 vi.mock("./resolve", () => resolveMocks);
@@ -87,6 +89,8 @@ beforeEach(() => {
   ingestMocks.persistIngestWrites.mockReset();
   ingestMocks.markSeedPostApplied.mockReset();
   resolveMocks.resolveDueClaims.mockReset();
+  resolveMocks.repairUnlinkedResolutions.mockReset();
+  resolveMocks.reconcileResolvedClaims.mockReset();
 
   dbState.getDb.mockReturnValue({
     select(shape: Record<string, unknown>) {
@@ -121,12 +125,18 @@ beforeEach(() => {
     applied.add(id);
   });
 
+  const emptyBatch = async (_now?: Date, hooks?: { onList?: (ids: string[]) => void }) => {
+    hooks?.onList?.([]);
+    return { reports: [], errors: [] };
+  };
   resolveMocks.resolveDueClaims.mockImplementation(
     async (_now: Date, _limit: number, hooks?: { onList?: (ids: string[]) => void }) => {
       hooks?.onList?.([]);
       return { reports: [], errors: [] };
     },
   );
+  resolveMocks.repairUnlinkedResolutions.mockImplementation(emptyBatch);
+  resolveMocks.reconcileResolvedClaims.mockImplementation(emptyBatch);
 });
 
 describe("runSeed", () => {

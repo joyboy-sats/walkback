@@ -206,10 +206,24 @@ export function formatResolveLine(report: {
  * `npm run list:memories` counts the relayer list. The homepage figure is
  * `memory_log`. The two numbers are not interchangeable.
  */
-export function formatRelayerListLines(live: number): string[] {
-  return [
+export function formatRelayerListLines(live: number, counts?: Record<string, number>): string[] {
+  const lines = [
     `relayer live ${live}`,
     "note       relayer list: every live memory on this delegate, all namespaces, including blobs never written to Postgres",
-    'note       homepage "memories · logged" is the Postgres memory_log row count. It is a different set.',
+    'note       homepage "memories · logged" is the Postgres memory_log row count. It is a different set, taken at that moment. An earlier inventory is not this live total.',
   ];
+  if (counts) {
+    const smoke = counts["walkback.smoke"] ?? 0;
+    const timing = counts["walkback.timing"] ?? 0;
+    const script = smoke + timing;
+    lines.push(
+      `note       script probes: walkback.smoke ${smoke}, walkback.timing ${timing} (${script} total). scripts/smoke.ts and scripts/timing.ts wrote these. They are not product memories and they are not in memory_log.`,
+    );
+    lines.push(`note       product namespaces in this list: ${live - script}.`);
+  } else {
+    lines.push(
+      "note       walkback.smoke and walkback.timing are script probes. They are part of this live total and are not part of memory_log.",
+    );
+  }
+  return lines;
 }

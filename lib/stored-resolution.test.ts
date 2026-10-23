@@ -97,5 +97,23 @@ describe("stored resolution", () => {
     expect(lines.join("\n")).toMatch(/relayer list/i);
     expect(lines.join("\n")).toMatch(/logged/);
     expect(lines.join("\n")).toMatch(/different set/);
+    expect(lines.join("\n")).toMatch(/walkback\.smoke/);
+    expect(lines.join("\n")).toMatch(/walkback\.timing/);
+  });
+
+  it("splits script probes out of the live total", () => {
+    const lines = formatRelayerListLines(108, {
+      "walkback.claim": 33,
+      "walkback.resolution": 29,
+      "walkback.score": 26,
+      "walkback.source": 10,
+      "walkback.smoke": 1,
+      "walkback.timing": 9,
+    });
+    expect(lines[0]).toBe("relayer live 108");
+    expect(lines.join("\n")).toContain("walkback.smoke 1");
+    expect(lines.join("\n")).toContain("walkback.timing 9");
+    expect(lines.join("\n")).toContain("product namespaces in this list: 98");
+    expect(lines.join("\n")).toMatch(/not in memory_log/);
   });
 });

@@ -130,11 +130,15 @@ The candidate file had no third admissible `@suintern_` claim.
 
 A rerun skips every post whose `seed_posts.applied_at` marker is set, so the
 original 17 are not inserted again and are not written to Walrus again. Only
-the new posts are ingested. Resolve checks a claim only while it is still
-pending and past its deadline. Already-resolved replay claims are not checked
-again. The log prints the expected cost and the worst case before resolve.
-After resolve it prints the credits this run actually spent. A second run of
-an already-seeded file observes 0.
+the new posts are ingested. Tatum runs only for a claim that is still pending
+and past its deadline. A resolution row with no Walrus blob is repaired from
+the stored verdict, with no Tatum call. A resolution that already names a blob
+is read once and, when the stored verdict differs, the projection is updated
+to that memory. The bytes are not rewritten, and a 409 does not mint a second
+key. The periodic worker parks a claim after an idempotency conflict instead
+of enqueueing it every minute. The log prints the expected cost and the worst
+case before resolve. After resolve it prints the credits this run actually
+spent. A second run of an already-seeded file observes 0.
 
 Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
@@ -191,7 +195,9 @@ claim memory per claim (33), and a resolution for each of the 11 replays and
 16 historical price claims whose deadlines have passed. The six open price
 claims stay pending and write no resolution. A `void` writes a resolution and
 no score. A `true` or `false` also writes a score memory. `list:memories`
-prints the account total.
+prints `relayer live` (every namespace) and names the `walkback.smoke` and
+`walkback.timing` probe counts. Those probes are not in `memory_log`. The
+homepage "logged" figure is `memory_log` only.
 
 Production already has the first 17 posts applied. Run the commands above
 once in the worker container after this image is deployed. That run skips

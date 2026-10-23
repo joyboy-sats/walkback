@@ -17,7 +17,12 @@ import { errorMessage, isDeadlineError } from "./bounded";
 import { configureDbPool, getDb, schema, closeDb } from "./db";
 import { ingest, markSeedPostApplied, persistIngestWrites } from "./ingest";
 import { destroyMemwal } from "./memwal";
-import { resolveDueClaims } from "./resolve";
+import {
+  reconcileResolvedClaims,
+  repairUnlinkedResolutions,
+  resolveDueClaims,
+  type ResolveHooks,
+} from "./resolve";
 import { formatResolveLine } from "./stored-resolution";
 import { ohlcvCreditUsage, resetOhlcvCreditUsage } from "./price-candle";
 import {
@@ -146,12 +151,29 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
       `expected ${ohlcvEstimate.credits} credits ` +
       `(${ohlcvEstimate.batchCalls} daily batch + ${ohlcvEstimate.singleCalls} single). ` +
       `Worst case ${ohlcvEstimate.worstCredits} credits if every boundary day and hour is refined. ` +
-      `Cap ${creditCap}. Already-resolved claims are skipped and are not checked again. ` +
+      `Cap ${creditCap}. Already-resolved claims are not sent to Tatum. ` +
+      `A recorded verdict with no Walrus memory is written once from that verdict. ` +
+      `A recorded verdict whose memory is already on Walrus is aligned to that memory and is not rewritten. ` +
       `A pending claim whose resolution memory is already on Walrus is adopted and does not call Tatum.`,
   );
   const resolveLimit = options.resolveLimit ?? 200;
   let resolveErrors: Array<{ claimId: string; error: string }> = [];
   const overCap = ohlcvEstimate.credits > creditCap;
+  const resolveHooks: ResolveHooks = {
+    onClaimLoaded(claim) {
+      const ext = claim.externalId ? ` ${claim.externalId}` : "";
+      log(`[seed] resolve ${claim.handle} ${claim.claimId}${ext}`);
+    },
+    onClaimDone(report, elapsedMs) {
+      log(`[seed] resolve done ${formatResolveLine(report)} ${elapsedMs}ms`);
+    },
+    onClaimError(claimId, error, elapsedMs) {
+      log(`[seed] resolve failed ${claimId} ${elapsedMs}ms: ${error}`);
+    },
+    stopOnError(err) {
+      return isDeadlineError(err) || /timed out/i.test(errorMessage(err));
+    },
+  };
 
   if (stopForTimeout) {
     failures.push({ step: "resolve", error: "skipped after a timed-out write" });
@@ -166,21 +188,9 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
     log("[seed] resolve phase");
     try {
       const resolved = await resolveDueClaims(now, resolveLimit, {
+        ...resolveHooks,
         onList(ids) {
           log(`[seed] resolve phase: ${ids.length} due claim(s)`);
-        },
-        onClaimLoaded(claim) {
-          const ext = claim.externalId ? ` ${claim.externalId}` : "";
-          log(`[seed] resolve ${claim.handle} ${claim.claimId}${ext}`);
-        },
-        onClaimDone(report, elapsedMs) {
-          log(`[seed] resolve done ${formatResolveLine(report)} ${elapsedMs}ms`);
-        },
-        onClaimError(claimId, error, elapsedMs) {
-          log(`[seed] resolve failed ${claimId} ${elapsedMs}ms: ${error}`);
-        },
-        stopOnError(err) {
-          return isDeadlineError(err) || /timed out/i.test(errorMessage(err));
         },
       });
       resolveErrors = resolved.errors;
@@ -192,6 +202,37 @@ export async function runSeed(raw: unknown, options: SeedRunOptions = {}): Promi
       const message = errorMessage(err);
       failures.push({ step: "resolve", error: message });
       log(`[seed] resolve phase failed: ${message}`);
+    }
+  }
+
+  if (!stopForTimeout) {
+    try {
+      const repaired = await repairUnlinkedResolutions(now, {
+        ...resolveHooks,
+        onList(ids) {
+          log(`[seed] repair phase: ${ids.length} resolution(s) with no Walrus blob`);
+        },
+      });
+      resolveErrors = [...resolveErrors, ...repaired.errors];
+      if (repaired.stopped) {
+        failures.push({ step: "repair", error: `stopped: ${repaired.stopped}` });
+        log(`[seed] repair phase stopped: ${repaired.stopped}`);
+      }
+      const reconciled = await reconcileResolvedClaims(now, {
+        ...resolveHooks,
+        onList(ids) {
+          log(`[seed] reconcile phase: ${ids.length} resolution(s) already linked to a blob`);
+        },
+      });
+      resolveErrors = [...resolveErrors, ...reconciled.errors];
+      if (reconciled.stopped) {
+        failures.push({ step: "reconcile", error: `stopped: ${reconciled.stopped}` });
+        log(`[seed] reconcile phase stopped: ${reconciled.stopped}`);
+      }
+    } catch (err) {
+      const message = errorMessage(err);
+      failures.push({ step: "repair", error: message });
+      log(`[seed] repair phase failed: ${message}`);
     }
   }
 

@@ -33,7 +33,9 @@ try {
     live += 1;
     byNamespace.set(memory.namespaceId, (byNamespace.get(memory.namespaceId) ?? 0) + 1);
   }
-  for (const line of formatRelayerListLines(live)) console.log(line);
+  const counts: Record<string, number> = {};
+  for (const [name, count] of byNamespace) counts[name] = count;
+  for (const line of formatRelayerListLines(live, counts)) console.log(line);
   console.log(`live ${live}`);
   console.log(`deleted ${walk.deleted.length}`);
   console.log(`pages ${walk.pages}`);
