@@ -12,11 +12,41 @@
  */
 import { z } from "zod";
 import { claimExternalId, claimExternalPrefix, stableUuid } from "./ids";
-import { priceParamsFromRaw } from "./price-candle";
+import {
+  OHLCV_BATCH_CREDITS,
+  OHLCV_SINGLE_CREDITS,
+  priceParamsFromRaw,
+  touchCreditPlan,
+} from "./price-candle";
 import type { ClaimParams, ClaimType, ExtractedClaim } from "./types";
 
 /** Matches `writeMemoriesBulk`'s server cap. A seed batch must not exceed it. */
 export const SEED_BULK_MAX = 20;
+
+/**
+ * `npm run seed` does not call Tatum when the expected OHLCV cost of
+ * still-unresolved past-deadline price claims is above this. The expected
+ * cost is the daily batch read. Worst-case boundary refinement is logged
+ * beside it and is not what this cap checks: that spend happens only after
+ * a daily candle shows the boundary could decide the touch.
+ */
+export const DEFAULT_SEED_OHLCV_CREDIT_CAP = 20_000;
+
+export function seedOhlcvCreditCap(raw: string | undefined, override?: number): number {
+  if (override !== undefined) {
+    if (!Number.isInteger(override) || override < 0) {
+      throw new Error("ohlcv credit cap must be a non-negative integer");
+    }
+    return override;
+  }
+  if (raw === undefined || raw.trim() === "") return DEFAULT_SEED_OHLCV_CREDIT_CAP;
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new Error("SEED_OHLCV_CREDIT_CAP must be a non-negative integer");
+  }
+  const value = Number(raw.trim());
+  if (!Number.isSafeInteger(value)) throw new Error("SEED_OHLCV_CREDIT_CAP is too large");
+  return value;
+}
 
 const claimTypes = [
   "balance_threshold",
@@ -81,7 +111,7 @@ export const seedPostSchema = z.object({
    * Use this for `tx_replay`, where the window has to be exact. Omit it and
    * the seed run extracts claims from `text`.
    */
-  claims: z.array(claimSchema).max(3).optional(),
+  claims: z.array(claimSchema).max(4).optional(),
 });
 
 export const seedFileSchema = z.object({
@@ -321,6 +351,63 @@ export interface SeedSummaryInput {
   failures?: Array<{ step: string; error: string }>;
   /** Posts left for a rerun because an earlier step timed out. */
   notAttempted?: string[];
+  /** What checking this file's past-deadline price claims costs, if they are still pending. */
+  ohlcvEstimate?: OhlcvCreditEstimate;
+  /** Live OHLCV calls made during this process. Replay mode stays at zero. */
+  ohlcvObserved?: { singles: number; batches: number; credits: number };
+}
+
+export interface OhlcvCreditEstimate {
+  claims: number;
+  /** Daily batch calls, the reads made when daily candles decide the touch. */
+  batchCalls: number;
+  singleCalls: number;
+  /** Expected cost: daily batches plus one single candle per `at_deadline` claim. */
+  credits: number;
+  /** Daily reads plus refining every boundary day and every boundary hour. */
+  worstBatchCalls: number;
+  worstCredits: number;
+}
+
+/**
+ * Credits to check every past-deadline price claim in the file.
+ *
+ * A touch is one daily batch for a window that fits in 50 candles. Worst
+ * case also refines each partial boundary day to hours and each partial
+ * boundary hour to minutes. `at_deadline` is one single candle. The six
+ * claims whose deadlines are still ahead are not included.
+ */
+export function estimateSeedOhlcv(posts: readonly SeedPost[], now: Date): OhlcvCreditEstimate {
+  let claims = 0;
+  let batchCalls = 0;
+  let worstBatchCalls = 0;
+  let singleCalls = 0;
+  for (const post of posts) {
+    for (const claim of post.claims ?? []) {
+      if (claim.claim_type !== "price_threshold") continue;
+      if (Date.parse(claim.deadline) > now.getTime()) continue;
+      claims += 1;
+      const evaluation = claim.params.evaluation === undefined ? "at_deadline" : String(claim.params.evaluation);
+      if (evaluation === "touch") {
+        const since = String(claim.params.since ?? post.published_at);
+        const plan = touchCreditPlan(Date.parse(since), Date.parse(claim.deadline));
+        batchCalls += plan.expectedBatches;
+        worstBatchCalls += plan.worstBatches;
+      } else {
+        singleCalls += 1;
+        worstBatchCalls += 0;
+      }
+    }
+  }
+  const singleCredits = singleCalls * OHLCV_SINGLE_CREDITS;
+  return {
+    claims,
+    batchCalls,
+    singleCalls,
+    credits: batchCalls * OHLCV_BATCH_CREDITS + singleCredits,
+    worstBatchCalls,
+    worstCredits: worstBatchCalls * OHLCV_BATCH_CREDITS + singleCredits,
+  };
 }
 
 /** Human-readable summary. The script prints this and nothing else at the end. */
@@ -363,6 +450,24 @@ export function formatSeedSummary(s: SeedSummaryInput): string {
   if (s.notAttempted?.length) {
     lines.push("not attempted");
     for (const id of s.notAttempted) lines.push(`  ${id}`);
+  }
+  if (s.ohlcvEstimate) {
+    const estimate = s.ohlcvEstimate;
+    lines.push(
+      `tatum      estimate ${estimate.claims} past-deadline price claim(s): ` +
+        `expected ${estimate.credits} credits ` +
+        `(${estimate.batchCalls} daily batch at ${OHLCV_BATCH_CREDITS}, ` +
+        `${estimate.singleCalls} single at ${OHLCV_SINGLE_CREDITS}) ` +
+        `if each is still unresolved. ` +
+        `Worst case, if every boundary day and hour is refined, ${estimate.worstCredits} credits. ` +
+        `Budget remaining about 99000.`,
+    );
+  }
+  if (s.ohlcvObserved) {
+    const observed = s.ohlcvObserved;
+    lines.push(
+      `tatum      observed this run: ${observed.singles} single, ${observed.batches} batch, ${observed.credits} credits`,
+    );
   }
   const incomplete = Boolean(s.failures?.length || s.notAttempted?.length || s.resolveErrors.length);
   lines.push(`status     ${incomplete ? "incomplete" : "ok"}`);

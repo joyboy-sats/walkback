@@ -24,9 +24,12 @@ remains is mostly surface area, seed data, and the submission artefacts.
 
 - `price_threshold` is judged from Tatum historical USD candles
   (`/v4/data/rate/symbol/OHLCV` and the batch route), not the spot rate.
-  Hourly first, daily when hourly cannot be requested. An unsupported symbol
-  or a gap resolves `void` and does not move the score. The six seeded price
-  claims are touches and stay pending until their deadlines.
+  A touch starts with daily candles. A partial boundary candle cannot by
+  itself establish a touch; that day is re-read hourly, then a boundary hour
+  at one minute, and an extreme that still cannot be placed inside the window
+  is `void`. An unsupported symbol or a gap is also `void`. A checkable miss
+  is `false`. Sixteen historical touches are already due. Six earlier ones
+  stay pending until 2026-10-30 and 2026-11-08.
 - `AI_GATEWAY_API_KEY` is unset, so extraction has never run.
 - `DATABASE_URL` is unset, so the projection has never been created.
 - `MEMWAL_AGENT_ID` is assumed to be the delegate public key. Unconfirmed.
@@ -96,20 +99,42 @@ assume order. Dedupe on `blob_id`.
 
 ## Task 4 — Seed data
 
-`scripts/seed.ts` reads `data/claims.json`. The committed file is real X posts
-collected 2026-10-20 (SGT): 17 posts, 17 claims, 7 handles. None are synthetic.
+`scripts/seed.ts` reads `data/claims.json`. The committed file is real X posts.
+None are synthetic. The first 17 posts (17 claims, 7 handles) were collected
+2026-10-20 (SGT). Thirteen later posts add the primary historical price set
+from `@Community_Sui` (4), `@mrcamerontrader` (3), `@cryptowithgopal` (3),
+`@Sophia_WebX` (4 claims in one post: SUI, SOL, ETH, BTC), and `@suintern_`
+(2). That is 30 posts, 33 claims, 10 handles. Backup accounts were not added.
+The candidate file had no third admissible `@suintern_` claim.
 
 - 11 `tx_replay` claims from `@_OnChainWatch`. Deadlines are on or before
   2026-10-20, so a seed run resolves them. Each post sets `"snapshot": null`
   so ingest does not read a live balance. The post whose quote says
   `From: 0x1ae70480` while the stored address differed is omitted; it had no
   other claim.
-- 6 `price_threshold` claims, every one `SUI`/`USD` and `evaluation: touch`.
-  Deadlines are 2026-10-30 and 2026-11-08, so the seed leaves them pending.
-  `since` is the post's `published_at`. `deadline_basis` records who chose
-  the deadline. Pricing is Tatum hourly (then daily) OHLCV, not the spot rate.
+- 6 `price_threshold` claims from the 2026-10-20 set, every one `SUI`/`USD`
+  and `evaluation: touch`. Deadlines stay 2026-10-30 and 2026-11-08, so the
+  seed leaves them pending. Those deadlines were not rewritten.
+- 16 historical `price_threshold` claims, all `evaluation: touch` and `USD`.
+  Their deadlines are already past, so one production seed adjudicates them.
+  A deadline the post states is labelled `stated`. A trade setup with no date
+  uses the 7-day benchmark; a technical-analysis post with no date uses the
+  14-day benchmark. The same phrase is used for every post in that class.
+  See README Methodology. A miss stays `false`. Missing coverage is `void`.
+  The log's expected Tatum cost for these 16, if they are still unresolved,
+  is 16 daily batch calls (8,000 credits). Worst case, refining every
+  boundary day and hour, is 49,000. `SEED_OHLCV_CREDIT_CAP` (default 20000)
+  aborts resolve before any Tatum call when the expected cost is higher.
 - `@mysqlsui` and both `balance_threshold` claims are omitted.
 - Each post keeps `source_url`. The feed links to it.
+
+A rerun skips every post whose `seed_posts.applied_at` marker is set, so the
+original 17 are not inserted again and are not written to Walrus again. Only
+the new posts are ingested. Resolve checks a claim only while it is still
+pending and past its deadline. Already-resolved replay claims are not checked
+again. The log prints the expected cost and the worst case before resolve.
+After resolve it prints the credits this run actually spent. A second run of
+an already-seeded file observes 0.
 
 Writes go one at a time through `rememberAndWait` with a stable idempotency
 key (`claim:{id}`, `source:{id}`). Bulk items cannot carry that key. Do not
@@ -125,7 +150,7 @@ npm run seed
 npm run list:memories
 ```
 
-Stdout names the post (`post 3/17 <id>`), each memory write as it starts and
+Stdout names the post (`post 3/30 <id>`), each memory write as it starts and
 as it finishes (elapsed milliseconds and blob id), then the resolve phase,
 then the summary. Exit 0 prints `status ok`. A non-zero exit prints
 `status incomplete`, a `failed` list, and `not attempted` when a timeout
@@ -159,11 +184,18 @@ contains this fix. Then `npm run list:memories`. If the exit code is still
 non-zero, the summary names the post or claim that failed; leave the rows in
 place and run `npm run seed` once more.
 
-On an empty delegate that accepts every write, the run adds 7 source memories,
-17 claim memories, 11 resolution memories, and one score memory per replay
-verdict that is `true` or `false`. A `void` writes a resolution and no score.
-That is 35 memories if every replay is void, and 46 if every replay is true
-or false. `list:memories` prints the account total.
+On an empty delegate the run writes one source memory per handle (10), one
+claim memory per claim (33), and a resolution for each of the 11 replays and
+16 historical price claims whose deadlines have passed. The six open price
+claims stay pending and write no resolution. A `void` writes a resolution and
+no score. A `true` or `false` also writes a score memory. `list:memories`
+prints the account total.
+
+Production already has the first 17 posts applied. Run the commands above
+once in the worker container after this image is deployed. That run skips
+those 17, so it does not insert them again and does not write them to Walrus
+again. It writes memories for the 13 new posts (3 new handles, 16 claims) and
+then the resolutions and scores for those 16 historical price claims.
 
 **Acceptance:** re-running `npm run seed` twice does not double the ledger, and
 the Feed links each claim to its original post.

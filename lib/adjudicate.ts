@@ -304,15 +304,20 @@ async function resolvePriceThreshold(
       from: p.since,
       to: deadline,
       direction: p.direction,
+      threshold: p.amount,
     });
     if (!loaded.ok) return voidVerdict(loaded.reason, { ...common, ...loaded.evidence });
-    const ok = p.direction === "gte" ? loaded.extreme.value >= threshold : loaded.extreme.value <= threshold;
+    // `touched` compares the candle's decimal text to the target. A rounded
+    // display value is not an input to that comparison.
+    const ok = loaded.touched;
     const side = p.direction === "gte" ? "high" : "low";
+    const bound =
+      loaded.extreme.bound === true ? (loaded.extreme.field === "high" ? "at most " : "no lower than ") : "";
     return {
       outcome: ok ? "true" : "false",
       reason:
         `From ${new Date(p.since).toISOString()} to ${new Date(deadline).toISOString()}, ` +
-        `Tatum ${symbol}/${quote} ${loaded.interval} ${side} was ${fmtPrice(loaded.extreme.value)} ` +
+        `Tatum ${symbol}/${quote} ${loaded.interval} ${side} was ${bound}${loaded.extreme.text} ` +
         `in the candle opening ${loaded.extreme.at}, ` +
         `${ok ? "" : "not "}${OP[p.direction]} the ${p.amount} claimed.`,
       evidence: {
@@ -324,6 +329,13 @@ async function resolvePriceThreshold(
         extreme: loaded.extreme,
         maxHigh: loaded.maxHigh,
         minLow: loaded.minLow,
+        windowHigh: loaded.windowHigh,
+        windowLow: loaded.windowLow,
+        highAtMost: loaded.highAtMost,
+        lowAtLeast: loaded.lowAtLeast,
+        decidingCandles: loaded.decidingCandles,
+        priceCompare: "unrounded",
+        strictWindow: true,
         boundary: loaded.boundary,
         candleCount: loaded.candles.length,
         requests: loaded.requests,
