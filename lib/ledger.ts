@@ -8,7 +8,20 @@
  * (`npm run list:memories` counts that, including blobs never logged here).
  * `verified` is set only when the newest finished rebuild job reported a
  * complete list walk.
+ *
+ * Mute rule is `forecast-primary` (see `lib/category-score.ts`). When category
+ * counts are supplied, the source's displayed score, hits, misses, band, and
+ * `muted` flag are that category's record: forecast if the source has any
+ * true/false price verdict, otherwise reporting. Totals say so explicitly.
+ * `all` includes muted sources. `visible` does not.
  */
+import {
+  foldCategories,
+  MUTE_RULE,
+  type CategoryCounts,
+  type CategoryScore,
+  type MuteBasis,
+} from "./category-score";
 import { MIN_SAMPLE, sourceIsMuted, trustBand, type TrustBand } from "./score";
 
 const CLAIM_TYPE_ORDER = [
@@ -33,24 +46,40 @@ export interface LedgerSourceInput {
   hits: number;
   misses: number;
   storedMuted: boolean;
+  /**
+   * Latest true/false counts per category. When all four are set, muting
+   * follows {@link MUTE_RULE} and ignores `storedMuted`.
+   */
+  reportingHits?: number;
+  reportingMisses?: number;
+  forecastHits?: number;
+  forecastMisses?: number;
 }
 
 export interface LedgerClaimInput {
   sourceId: string;
   claimType: string;
   status: "pending" | "resolved" | "void";
+  /** Latest verdict. Omit the field when outcomes were not loaded. */
+  outcome?: "true" | "false" | "void" | null;
 }
 
 export interface LedgerSource {
   id: string;
   handle: string;
+  /** Mute-basis record when categories were supplied. Otherwise the stored overall score. */
   score: number;
   hits: number;
   misses: number;
   /** Formula band. Unrated wins over a stored mute when the sample is under 3. */
   band: TrustBand;
-  /** Same rule as the feed: a stored mute does not hide an unrated source. */
+  /** Same rule as the feed. */
   muted: boolean;
+  /** Which record `band` and `muted` came from. Null when categories were not supplied. */
+  muteBasis: MuteBasis | null;
+  overall: CategoryScore | null;
+  reporting: CategoryScore | null;
+  forecast: CategoryScore | null;
   claimTypes: string[];
 }
 
@@ -67,7 +96,35 @@ export interface LedgerMemories {
   verified: number | null;
 }
 
-export interface LedgerTotals {
+export interface StatusCounts {
+  claims: number;
+  resolved: number;
+  pending: number;
+  void: number;
+}
+
+export interface CountingTotals {
+  /** `forecast-primary`: see lib/category-score.ts. */
+  muteRule: typeof MUTE_RULE;
+  /** `all` counts claims from muted sources. */
+  allIncludesMuted: true;
+  /** `visible` drops claims whose source is muted. */
+  visibleIncludesMuted: false;
+  all: StatusCounts;
+  visible: StatusCounts;
+  /** Sources the mute rule hides. */
+  mutedSources: number;
+  /** Claims that belong to muted sources. */
+  hiddenClaims: number;
+  /**
+   * Hidden claims whose latest verdict is false.
+   * Null when the caller did not pass outcomes.
+   */
+  hiddenClaimsFalse: number | null;
+}
+
+export interface LedgerTotals extends CountingTotals {
+  /** Same as `all`. Kept so the current homepage can keep reading these fields. */
   claims: number;
   resolved: number;
   pending: number;
@@ -114,6 +171,26 @@ export function verifiedMemoryCount(result: unknown): number | null {
   return unique;
 }
 
+function hasCategoryCounts(source: LedgerSourceInput): source is LedgerSourceInput & CategoryCounts {
+  return (
+    typeof source.reportingHits === "number" &&
+    typeof source.reportingMisses === "number" &&
+    typeof source.forecastHits === "number" &&
+    typeof source.forecastMisses === "number"
+  );
+}
+
+function emptyStatus(): StatusCounts {
+  return { claims: 0, resolved: 0, pending: 0, void: 0 };
+}
+
+function addStatus(counts: StatusCounts, status: LedgerClaimInput["status"]): void {
+  counts.claims += 1;
+  if (status === "resolved") counts.resolved += 1;
+  else if (status === "pending") counts.pending += 1;
+  else if (status === "void") counts.void += 1;
+}
+
 export function buildLedger(input: {
   sources: readonly LedgerSourceInput[];
   claims: readonly LedgerClaimInput[];
@@ -121,54 +198,84 @@ export function buildLedger(input: {
   latestVerifyResult: unknown;
 }): LedgerView {
   const typesBySource = new Map<string, string[]>();
-  let resolved = 0;
-  let pending = 0;
-  let voids = 0;
   for (const claim of input.claims) {
-    if (claim.status === "resolved") resolved += 1;
-    else if (claim.status === "pending") pending += 1;
-    else if (claim.status === "void") voids += 1;
     const list = typesBySource.get(claim.sourceId);
     if (list) list.push(claim.claimType);
     else typesBySource.set(claim.sourceId, [claim.claimType]);
   }
 
   const sources = input.sources.map((source) => {
+    const categories = hasCategoryCounts(source) ? foldCategories(source, source.hits, source.misses) : null;
     const adjudicated = source.hits + source.misses;
+    const shown = categories?.basis;
     return {
       id: source.id,
       handle: source.handle,
-      score: source.score,
-      hits: source.hits,
-      misses: source.misses,
-      band: trustBand(source.score, adjudicated),
-      muted: sourceIsMuted(source.storedMuted, adjudicated),
+      score: shown?.score ?? source.score,
+      hits: shown?.hits ?? source.hits,
+      misses: shown?.misses ?? source.misses,
+      band: shown?.band ?? trustBand(source.score, adjudicated),
+      muted: categories ? categories.muted : sourceIsMuted(source.storedMuted, adjudicated),
+      muteBasis: categories?.muteBasis ?? null,
+      overall: categories?.overall ?? null,
+      reporting: categories?.reporting ?? null,
+      forecast: categories?.forecast ?? null,
       claimTypes: sortClaimTypes(typesBySource.get(source.id) ?? []),
     };
   });
 
-  sources.sort((a, b) => {
-    const band = BAND_ORDER[a.band] - BAND_ORDER[b.band];
-    if (band !== 0) return band;
-    if (a.band !== "unknown" && a.score !== b.score) return b.score - a.score;
-    const sample = b.hits + b.misses - (a.hits + a.misses);
-    if (sample !== 0) return sample;
-    return a.handle.localeCompare(b.handle);
-  });
+  sources.sort((a, b) => compareTrust(a, b) || a.handle.localeCompare(b.handle));
+
+  const mutedIds = new Set(sources.filter((source) => source.muted).map((source) => source.id));
+  const all = emptyStatus();
+  const visible = emptyStatus();
+  let hiddenClaims = 0;
+  let hiddenFalse = 0;
+  let outcomesKnown = true;
+  for (const claim of input.claims) {
+    addStatus(all, claim.status);
+    const hidden = mutedIds.has(claim.sourceId);
+    if (hidden) {
+      hiddenClaims += 1;
+      if (!("outcome" in claim)) outcomesKnown = false;
+      else if (claim.outcome === "false") hiddenFalse += 1;
+    } else {
+      addStatus(visible, claim.status);
+    }
+  }
+  if (input.claims.some((claim) => !("outcome" in claim))) outcomesKnown = false;
 
   return {
     sources,
     totals: {
-      claims: input.claims.length,
-      resolved,
-      pending,
-      void: voids,
+      claims: all.claims,
+      resolved: all.resolved,
+      pending: all.pending,
+      void: all.void,
+      muteRule: MUTE_RULE,
+      allIncludesMuted: true,
+      visibleIncludesMuted: false,
+      all,
+      visible,
+      mutedSources: mutedIds.size,
+      hiddenClaims,
+      hiddenClaimsFalse: outcomesKnown ? hiddenFalse : null,
       memories: {
         inventory: nonNegativeInt(input.memoryInventory),
         verified: verifiedMemoryCount(input.latestVerifyResult),
       },
     },
   };
+}
+
+export function compareTrust(
+  a: { band: TrustBand; score: number; hits: number; misses: number },
+  b: { band: TrustBand; score: number; hits: number; misses: number },
+): number {
+  const band = BAND_ORDER[a.band] - BAND_ORDER[b.band];
+  if (band !== 0) return band;
+  if (a.band !== "unknown" && a.score !== b.score) return b.score - a.score;
+  return b.hits + b.misses - (a.hits + a.misses);
 }
 
 export function includeMutedParam(value: string | string[] | undefined): boolean {
@@ -184,4 +291,11 @@ export function visibleClaims<T extends { source: { muted: boolean } }>(
   return { visible, hidden: rows.length - visible.length };
 }
 
-export { MIN_SAMPLE };
+export function feedRows<T>(payload: readonly T[] | { rows?: readonly T[] } | null | undefined): T[] {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return [...payload];
+  const rows = (payload as { rows?: readonly T[] }).rows;
+  return Array.isArray(rows) ? [...rows] : [];
+}
+
+export { MIN_SAMPLE, MUTE_RULE };

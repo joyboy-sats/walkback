@@ -20,8 +20,10 @@ import "server-only";
 
 import { parseFencedJson } from "./stored-resolution";
 import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
+import { foldVerdicts, type MuteBasis } from "./category-score";
 import { applyOutcome, computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
+import { seedPublishedAt } from "./post-time";
 import {
   contentPlan,
   finishInventory,
@@ -172,6 +174,11 @@ export interface RebuiltSource {
   hitRate: number;
   band: TrustBand;
   muted: boolean;
+  reportingHits: number;
+  reportingMisses: number;
+  forecastHits: number;
+  forecastMisses: number;
+  muteBasis: MuteBasis;
 }
 
 export interface RebuiltClaim {
@@ -189,6 +196,7 @@ export interface RebuiltClaim {
   externalId: string | null;
   sourceUrl: string | null;
   deadlineBasis: string | null;
+  publishedAt: string | null;
   walrusBlobId: string;
   createdAt: string;
 }
@@ -388,23 +396,25 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
   }
 
   for (const source of sources.values()) {
-    let hits = 0;
-    let misses = 0;
+    const verdicts: Array<{ claimType: ClaimType; outcome: Outcome }> = [];
     for (const claim of claims.values()) {
       if (claim.sourceId !== source.id) continue;
       const resolution = resolutions.get(claim.id);
       if (!resolution || resolution.outcome === "void") continue;
-      if (resolution.outcome === "true") hits++;
-      else misses++;
+      verdicts.push({ claimType: claim.claimType, outcome: resolution.outcome });
     }
-    const score = computeScore(hits, misses);
-    source.hits = score.hits;
-    source.misses = score.misses;
-    source.score = score.score;
-    source.hitRate = score.hitRate;
-    source.band = score.band;
-    source.muted = score.band === "muted";
-
+    const folded = foldVerdicts(verdicts);
+    source.hits = folded.overall.hits;
+    source.misses = folded.overall.misses;
+    source.score = folded.overall.score;
+    source.hitRate = folded.overall.n === 0 ? 0 : folded.overall.hits / folded.overall.n;
+    source.band = folded.overall.band;
+    source.muted = folded.muted;
+    source.reportingHits = folded.reporting.hits;
+    source.reportingMisses = folded.reporting.misses;
+    source.forecastHits = folded.forecast.hits;
+    source.forecastMisses = folded.forecast.misses;
+    source.muteBasis = folded.muteBasis;
   }
 
   const scoreVersionsDerived = deriveScoreVersions({
@@ -1297,6 +1307,10 @@ async function applyProjection(p: Projection): Promise<void> {
           misses: s.misses,
           score: s.score,
           muted: s.muted,
+          reportingHits: s.reportingHits,
+          reportingMisses: s.reportingMisses,
+          forecastHits: s.forecastHits,
+          forecastMisses: s.forecastMisses,
           createdAt: new Date(s.createdAt),
           walrusBlobId: s.walrusBlobId,
         })),
@@ -1319,6 +1333,7 @@ async function applyProjection(p: Projection): Promise<void> {
           externalId: c.externalId,
           sourceUrl: c.sourceUrl,
           deadlineBasis: c.deadlineBasis,
+          publishedAt: c.publishedAt ? new Date(c.publishedAt) : null,
           createdAt: new Date(c.createdAt),
           walrusBlobId: c.walrusBlobId,
         })),
@@ -1459,6 +1474,15 @@ function addSource(
   byHandle.set(handle, row);
 }
 
+function publishedAtFrom(payload: Record<string, unknown>): string | null {
+  if (typeof payload.published_at === "string" && !Number.isNaN(Date.parse(payload.published_at))) {
+    return new Date(payload.published_at).toISOString();
+  }
+  const externalId = typeof payload.external_id === "string" ? payload.external_id : null;
+  const sourceUrl = typeof payload.source_url === "string" ? payload.source_url : null;
+  return seedPublishedAt(externalId, sourceUrl);
+}
+
 function addClaim(
   mem: GatheredMemory,
   payload: Record<string, unknown>,
@@ -1498,6 +1522,7 @@ function addClaim(
       typeof payload.deadline_basis === "string" && payload.deadline_basis.trim()
         ? payload.deadline_basis.trim().slice(0, 160)
         : null,
+    publishedAt: publishedAtFrom(payload),
     walrusBlobId: mem.blobId,
     createdAt: mem.createdAt ?? new Date(0).toISOString(),
   });
@@ -1620,6 +1645,11 @@ function blankSource(id: string, handle: string, blobId: string, createdAt: stri
     hitRate: 0,
     band: "unknown",
     muted: false,
+    reportingHits: 0,
+    reportingMisses: 0,
+    forecastHits: 0,
+    forecastMisses: 0,
+    muteBasis: "reporting",
   };
 }
 

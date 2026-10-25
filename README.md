@@ -67,7 +67,7 @@ When the post names a horizon, that horizon is the deadline, in UTC, and `deadli
 
 The number is the lower bound of a 95% Wilson score interval over hits and misses. It is not a raw hit rate and not a model call. One correct guess is not evidence: 1 hit out of 1 claim is about 0.21, and 8 out of 10 is about 0.49.
 
-The mute threshold is 0.40 and the trust threshold is 0.55. Once at least 3 claims have been adjudicated, a bound below 0.40 mutes the source and its claims leave the feed. A bound of 0.55 or higher is trusted. Below 3 adjudicated claims the source is unrated: the UI shows an em dash instead of a number, plus how many verdicts are still needed, and the source is not muted — even when the stored bound is 0.
+The mute threshold is 0.40 and the trust threshold is 0.55. Each source keeps an overall Wilson record and two category records. Reporting counts `tx_replay`, `balance_threshold`, and `balance_change_since_ingest`. Forecast counts `price_threshold`. A `manual` verdict stays in the overall record. The mute rule is forecast-primary: when the source has a forecast verdict, the feed uses the forecast bound; otherwise it uses the reporting bound. Below 3 adjudicated claims in that record the source is unrated: the UI shows an em dash instead of a number, plus how many verdicts are still needed, and the source is not muted — even when the stored bound is 0. A bound below 0.40 mutes the source and its claims leave the feed. A bound of 0.55 or higher is trusted. The homepage shows the mute-basis band. `/ledger` and `/feed` also return the reporting record, the forecast record, the overall record, and `muteRule: "forecast-primary"`. The `hits` and `misses` columns on the source row stay the overall counts.
 
 ---
 
@@ -323,7 +323,8 @@ Worker command, also `npm run worker`:
 `server-only`. Both processes apply `drizzle/` on boot. `npm run db:migrate`
 is the same migrator for a one-off.
 
-Reads (`GET /feed`, `/ledger`, `/sources/:id`, `/memory`, `/jobs/:id`) are public.
+Reads (`GET /feed`, `/ledger`, `/sources/:id`, `/claims/:id`, `/memory`, `/jobs/:id`) are public.
+`GET /claims/:id` returns the stored claim, the parsed target and window, and the stored evidence. It does not call Tatum.
 `/ledger` is the homepage summary: every source (band, hits, misses, claim
 types) and the projection totals. The memory total labeled "logged" is the
 number of `memory_log` rows. It is labeled verified only when the newest
