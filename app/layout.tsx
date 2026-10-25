@@ -3,6 +3,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getTranslations } from "next-intl/server";
 import { BrandMark } from "@/components/brand-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -27,12 +28,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     { href: "/", label: t("feed") },
     { href: "/ingest", label: t("ingest") },
     { href: "/memory", label: t("memory") },
+    { href: "/methodology", label: t("methodology") },
   ];
 
   return (
     <html lang={locale}>
       <body className="min-h-dvh">
         <NextIntlClientProvider>
+          <TooltipProvider>
           <header className="sticky top-0 z-20 border-b border-line bg-surface-0/85 backdrop-blur-md">
             <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
               <a href="/" className="group flex shrink-0 items-center gap-2">
@@ -65,10 +68,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           <footer className="mx-auto mt-16 max-w-5xl px-6 pb-14">
             <p className="max-w-[68ch] text-[12px] leading-relaxed text-ink-3">{common("disclaimer")}</p>
             <div className="rule mt-4 flex flex-col gap-2 pt-5 text-[12px] text-ink-3 sm:flex-row sm:items-baseline">
+              <a href="/methodology" className="w-fit underline-offset-4 hover:underline">
+                {t("methodology")}
+              </a>
               <span>{footer("record")}</span>
               <span className="sm:ml-auto">{footer("bound")}</span>
             </div>
           </footer>
+          </TooltipProvider>
         </NextIntlClientProvider>
       </body>
     </html>
