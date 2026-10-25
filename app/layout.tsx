@@ -44,10 +44,26 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   Walkback
                 </span>
               </a>
-              <span className="hidden text-[13px] text-ink-3 sm:inline">{t("tagline")}</span>
+              <span className="hidden min-w-0 truncate text-[13px] text-ink-3 lg:inline">{t("tagline")}</span>
 
-              <div className="ml-auto flex items-center gap-1 sm:gap-2">
-                <nav className="flex items-center">
+              <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+                <details className="relative sm:hidden">
+                  <summary className="list-none rounded-md px-2 py-1.5 text-[12px] text-ink-2 marker:content-none [&::-webkit-details-marker]:hidden">
+                    {t("menu")}
+                  </summary>
+                  <nav className="absolute right-0 z-30 mt-1 w-max rounded-md border border-line bg-surface-1 p-1">
+                    {nav.map((item) => (
+                      <a
+                        key={item.href}
+                        href={item.href}
+                        className="block w-fit rounded-md px-2.5 py-1.5 text-[13px] text-ink-2 hover:bg-surface-2 hover:text-ink"
+                      >
+                        {item.label}
+                      </a>
+                    ))}
+                  </nav>
+                </details>
+                <nav className="hidden items-center sm:flex">
                   {nav.map((item) => (
                     <a
                       key={item.href}

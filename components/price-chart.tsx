@@ -1,4 +1,4 @@
-import type { PricePath } from "@/lib/feed-present";
+import { timeFraction, type PricePath } from "@/lib/feed-present";
 
 /**
  * Stored deciding-candle prints against the target.
@@ -20,11 +20,10 @@ export function PriceChart({
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
-  const x = (index: number) =>
-    padX + (index / Math.max(path.points.length - 1, 1)) * (width - padX * 2);
+  const x = (at: string) => padX + timeFraction(at, path.points) * (width - padX * 2);
   const y = (value: number) => padY + (1 - (value - min) / span) * (height - padY * 2);
   const line = path.points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)} ${y(point.value).toFixed(1)}`)
+    .map((point, index) => `${index === 0 ? "M" : "L"}${x(point.at).toFixed(1)} ${y(point.value).toFixed(1)}`)
     .join(" ");
   const targetY = path.target === null ? null : y(path.target);
 
@@ -48,7 +47,7 @@ export function PriceChart({
       )}
       <path d={line} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-ink" />
       {path.points.map((point, index) => (
-        <circle key={point.at} cx={x(index)} cy={y(point.value)} r="2.5" className="fill-ink" />
+        <circle key={point.at} cx={x(point.at)} cy={y(point.value)} r="2.5" className="fill-ink" />
       ))}
     </svg>
   );

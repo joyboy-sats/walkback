@@ -15,7 +15,7 @@ import {
   heroSource,
   pricePath,
   shownActual,
-  type ShownPrint,
+  type ShownActual,
 } from "@/lib/feed-present";
 import {
   feedRows,
@@ -247,8 +247,8 @@ export default async function FeedPage({
                     <a href={`/sources/${group.source.id}`} className="underline-offset-4 hover:underline">
                       {t("sourcePage")}
                     </a>
-                    {group.source.muteBasis && (
-                      <span className="ml-3 text-ink-3">{basisPhrase(group.source.muteBasis, t)}</span>
+                    {muteBasisNote(group.source, t) && (
+                      <span className="ml-3 text-ink-3">{muteBasisNote(group.source, t)}</span>
                     )}
                     <span className="ml-3">
                       <Term label={t("trustScore")} tip={t("trustScoreTip")} />
@@ -319,7 +319,7 @@ async function Leaderboard({
                     <span className="tnum">
                       {t("rightWrong", { right: record?.hits ?? 0, wrong: record?.misses ?? 0 })}
                     </span>
-                    {source.muteBasis && <span>{basisPhrase(source.muteBasis, t)}</span>}
+                    {muteBasisNote(source, t) && <span>{muteBasisNote(source, t)}</span>}
                   </span>
                 </a>
               </li>
@@ -481,17 +481,38 @@ function actualPair(
   return t("expectedActual", { money: expected, actual: actualText(print, detail.parsed.quote, locale, t) });
 }
 
+function moneyPrint(value: string, quote: string | null): string {
+  const shown = displayDecimal(value);
+  return quote === "USD" ? `$${shown}` : shown;
+}
+
 function actualText(
-  print: ShownPrint,
+  print: ShownActual,
   quote: string | null,
   locale: Locale,
   t: Awaited<ReturnType<typeof getTranslations>>,
 ): string {
-  const shown = displayDecimal(print.value);
-  const value = quote === "USD" ? `$${shown}` : shown;
-  if (print.bound && print.field === "low") return t("actualBoundLow", { value });
-  if (print.bound) return t("actualBoundHigh", { value });
-  const date = print.at ? formatDateOnly(print.at, locale) : null;
+  if (print.bound) {
+    const bound = moneyPrint(print.bound.value, quote);
+    const boundDate = print.bound.at ? formatDateOnly(print.bound.at, locale) : null;
+    const inside = print.inWindow;
+    const inDate = inside?.at ? formatDateOnly(inside.at, locale) : null;
+    if (inside && boundDate && inDate) {
+      return t(print.field === "low" ? "actualBoundLowWindow" : "actualBoundHighWindow", {
+        bound,
+        boundDate,
+        inWindow: moneyPrint(inside.value, quote),
+        inWindowDate: inDate,
+      });
+    }
+    if (boundDate) {
+      return t(print.field === "low" ? "actualBoundLowDated" : "actualBoundHighDated", { bound, boundDate });
+    }
+    return t(print.field === "low" ? "actualBoundLow" : "actualBoundHigh", { value: bound });
+  }
+  if (!print.reached) return t("unknownValue");
+  const value = moneyPrint(print.reached.value, quote);
+  const date = print.reached.at ? formatDateOnly(print.reached.at, locale) : null;
   if (!date) return value;
   if (print.field === "low") return t("actualLow", { value, date });
   if (print.field === "close") return t("actualClose", { value, date });
@@ -523,30 +544,45 @@ function groupSummary(
   t: Awaited<ReturnType<typeof getTranslations>>,
 ): string {
   const parts: string[] = [];
-  const pending = rows.filter((row) => row.claim.status === "pending").length;
-  if (source.forecast && (source.forecast.n > 0 || source.claimTypes.includes("price_threshold"))) {
+  const pendingForecast = rows.filter(
+    (row) => row.claim.status === "pending" && row.claim.claimType === "price_threshold",
+  ).length;
+  const pendingReporting = rows.filter(
+    (row) => row.claim.status === "pending" && REPORTING_TYPES.has(row.claim.claimType),
+  ).length;
+  const forecastN = source.forecast?.n ?? 0;
+  const reportingN = source.reporting?.n ?? 0;
+  if (forecastN === 0 && reportingN === 0) parts.push(t("notYetRated"));
+  if (forecastN > 0 && source.forecast) {
     parts.push(t("forecastSummary", { n: source.forecast.n, hits: source.forecast.hits }));
+  } else if (pendingForecast > 0) {
+    parts.push(t("forecastOpen", { count: pendingForecast }));
   }
-  if (source.reporting && (source.reporting.n > 0 || source.claimTypes.some((type) => REPORTING_TYPES.has(type)))) {
-    if (source.reporting.n > 0 && source.reporting.misses === 0) {
-      parts.push(t("reportsAllVerified", { n: source.reporting.n }));
-    } else if (source.reporting.n > 0) {
-      parts.push(t("reportsRecord", { n: source.reporting.n, hits: source.reporting.hits }));
-    }
+  if (reportingN > 0 && source.reporting) {
+    if (source.reporting.misses === 0) parts.push(t("reportsAllVerified", { n: source.reporting.n }));
+    else parts.push(t("reportsRecord", { n: source.reporting.n, hits: source.reporting.hits }));
+  } else if (pendingReporting > 0) {
+    parts.push(t("reportsOpen", { count: pendingReporting }));
   }
-  if (pending > 0) parts.push(t("stillOpen", { count: pending }));
+  const pendingLeft = rows.filter((row) => row.claim.status === "pending").length - pendingForecast - pendingReporting;
+  if (pendingLeft > 0) parts.push(t("stillOpen", { count: pendingLeft }));
   if (parts.length === 0) parts.push(t("claimsInGroup", { count: rows.length }));
   return parts.join(" · ");
+}
+
+function muteBasisNote(
+  source: LedgerSource,
+  t: Awaited<ReturnType<typeof getTranslations>>,
+): string | null {
+  if (source.muteBasis === "forecast" && (source.forecast?.n ?? 0) > 0) return t("basisForecast");
+  if (source.muteBasis === "reporting" && (source.reporting?.n ?? 0) > 0) return t("basisReporting");
+  return null;
 }
 
 function basisRecord(source: LedgerSource) {
   if (source.muteBasis === "reporting") return source.reporting;
   if (source.muteBasis === "forecast") return source.forecast;
   return source.overall;
-}
-
-function basisPhrase(basis: "forecast" | "reporting", t: Awaited<ReturnType<typeof getTranslations>>): string {
-  return basis === "forecast" ? t("basisForecast") : t("basisReporting");
 }
 
 function inForecast(source: LedgerSource): boolean {

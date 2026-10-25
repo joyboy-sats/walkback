@@ -64,11 +64,55 @@ function candleValue(candle: DecidingCandleView, basis: ClaimDetail["parsed"]["p
   return Number.isFinite(value) ? value : null;
 }
 
-/** A line needs two stored prints. One candle, or a window high on another day, is not a series. */
+const NOMINAL_SPANS_MS = [60_000, 3_600_000, 86_400_000];
+
+/**
+ * Open-to-close length, snapped to a minute, hour, or day when the stored
+ * close is within a second of that length. A candle that ends 1ms early is
+ * still a daily candle. Other lengths stay distinct.
+ */
+function candleSpanMs(candle: DecidingCandleView): number | null {
+  const open = Date.parse(candle.openTime);
+  const close = Date.parse(candle.closeTime);
+  if (Number.isNaN(open) || Number.isNaN(close) || close <= open) return null;
+  const span = close - open;
+  for (const nominal of NOMINAL_SPANS_MS) {
+    if (Math.abs(span - nominal) <= 1000) return nominal;
+  }
+  return span;
+}
+
+/**
+ * A line needs two stored prints of one granularity.
+ * One candle is not a series. Daily and hourly candles are not connected.
+ * When more than one granularity has two prints, the larger set is used;
+ * a tie keeps the shorter candles.
+ */
 export function pricePath(detail: ClaimDetail | null | undefined): PricePath | null {
   const candles = detail?.actual?.decidingCandles ?? [];
-  const points: PricePoint[] = [];
+  const bySpan = new Map<number, DecidingCandleView[]>();
   for (const candle of candles) {
+    const span = candleSpanMs(candle);
+    if (span === null) continue;
+    const list = bySpan.get(span) ?? [];
+    list.push(candle);
+    bySpan.set(span, list);
+  }
+  let chosen: DecidingCandleView[] | null = null;
+  let chosenSpan = Number.POSITIVE_INFINITY;
+  let chosenCount = 0;
+  for (const [span, list] of bySpan) {
+    const count = list.filter((candle) => candleValue(candle, detail?.parsed.priceBasis ?? null) !== null).length;
+    if (count < 2) continue;
+    if (count > chosenCount || (count === chosenCount && span < chosenSpan)) {
+      chosen = list;
+      chosenSpan = span;
+      chosenCount = count;
+    }
+  }
+  if (!chosen) return null;
+  const points: PricePoint[] = [];
+  for (const candle of chosen) {
     const value = candleValue(candle, detail?.parsed.priceBasis ?? null);
     if (value === null) continue;
     points.push({ at: candle.openTime, value });
@@ -79,51 +123,72 @@ export function pricePath(detail: ClaimDetail | null | undefined): PricePath | n
   return { points, target };
 }
 
+/** 0 at the earliest stored time, 1 at the latest. Equal times sit in the middle. */
+export function timeFraction(at: string, points: readonly { at: string }[]): number {
+  const times = points.map((point) => Date.parse(point.at)).filter((time) => !Number.isNaN(time));
+  const time = Date.parse(at);
+  if (times.length === 0 || Number.isNaN(time)) return 0;
+  const earliest = Math.min(...times);
+  const latest = Math.max(...times);
+  if (latest === earliest) return 0.5;
+  return (time - earliest) / (latest - earliest);
+}
+
 /** Drop padding zeros on a stored decimal such as 0.85750000. Short targets such as 1.0 stay as stored. */
 export function displayDecimal(value: string): string {
   if (!/^\d+\.\d{5,}$/.test(value)) return value;
   return value.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 }
 
-export interface ShownPrint {
+export interface StoredPrint {
   value: string;
   at: string | null;
+}
+
+export interface ShownActual {
   field: "high" | "low" | "close" | null;
-  /** True when the stored extreme only bounds a candle that sticks out of the window. */
-  bound: boolean;
+  /**
+   * A print inside the window that can be stated as reached.
+   * Null when the stored extreme is only a bound on a boundary day.
+   */
+  reached: StoredPrint | null;
+  /** Cap from a candle that sticks out of the window. Not a price that printed inside it. */
+  bound: StoredPrint | null;
+  /** Highest or lowest full day inside the window, stored beside a bound. */
+  inWindow: StoredPrint | null;
+}
+
+function printOf(value: string | null | undefined, at: string | null | undefined): StoredPrint | null {
+  if (!value) return null;
+  return { value, at: at ?? null };
 }
 
 /**
- * The print to show next to the target.
- * A bound extreme may have printed outside the window, so an in-window
- * window high or low replaces it when one was stored.
+ * What to say about the stored price.
+ * A bound extreme is a cap on a boundary day, not "the high reached" the
+ * lower in-window day. Both numbers are returned when both were stored.
  */
-export function shownActual(detail: ClaimDetail | null | undefined): ShownPrint | null {
+export function shownActual(detail: ClaimDetail | null | undefined): ShownActual | null {
   const actual = detail?.actual;
   if (!actual) return null;
   const basis = detail?.parsed.priceBasis;
-  const inWindow = basis === "low" ? actual.windowLow : actual.windowHigh;
+  const inWindowExtreme = basis === "low" ? actual.windowLow : actual.windowHigh;
   const extreme = actual.extreme;
-  if (extreme?.bound === true && inWindow?.value) {
+  const field = extreme?.field ?? inWindowExtreme?.field ?? (basis === "low" || basis === "high" || basis === "close" ? basis : null);
+  if (extreme?.bound === true && extreme.value) {
     return {
-      value: inWindow.value,
-      at: inWindow.at,
-      field: inWindow.field ?? (basis === "low" ? "low" : "high"),
-      bound: false,
+      field,
+      reached: null,
+      bound: printOf(extreme.value, extreme.at),
+      inWindow: printOf(inWindowExtreme?.value, inWindowExtreme?.at),
     };
   }
   if (extreme?.value) {
-    return {
-      value: extreme.value,
-      at: extreme.at,
-      field: extreme.field,
-      bound: extreme.bound === true,
-    };
+    return { field, reached: printOf(extreme.value, extreme.at), bound: null, inWindow: null };
   }
-  if (inWindow?.value) {
-    return { value: inWindow.value, at: inWindow.at, field: inWindow.field, bound: false };
-  }
-  return null;
+  const inside = printOf(inWindowExtreme?.value, inWindowExtreme?.at);
+  if (!inside) return null;
+  return { field, reached: inside, bound: null, inWindow: null };
 }
 
 export interface FeedGroup<T extends { source: { id: string; muted: boolean } }> {

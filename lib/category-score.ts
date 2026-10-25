@@ -6,7 +6,8 @@
  * A source can be a perfect reporter and a bad forecaster. Those are separate
  * samples. Each uses the same Wilson lower bound, the same mute (0.4) and
  * trusted (0.55) cuts, and the same rule that n < 3 is `unknown` and not muted.
- * `manual` is neither category. It still counts in the overall record.
+ * `manual` is neither category. Adjudication always voids it, so it never
+ * counts in the overall record or in either category.
  *
  * Mute rule: `forecast-primary`.
  * When a source has at least one true or false price verdict, the feed hides

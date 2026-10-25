@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ClaimDetail } from "./claim-view";
-import { displayDecimal, groupFeed, heroClaim, heroSource, pricePath, shownActual } from "./feed-present";
+import { displayDecimal, groupFeed, heroClaim, heroSource, pricePath, shownActual, timeFraction } from "./feed-present";
 import type { LedgerSource } from "./ledger";
 
 function source(partial: Partial<LedgerSource> & Pick<LedgerSource, "id" | "handle">): LedgerSource {
@@ -165,11 +165,11 @@ describe("stored price path", () => {
     });
   });
 
-  it("prefers the in-window high when the stored extreme is only a bound", () => {
+  it("keeps a boundary-day cap separate from the in-window high", () => {
     const view = detail({
       actual: {
-        extreme: { value: "0.8509", at: "2026-08-24T00:00:00.000Z", candleOpen: "2026-08-24T00:00:00.000Z", field: "high", bound: true },
-        windowHigh: { value: "0.8349", at: "2026-08-25T00:00:00.000Z", candleOpen: "2026-08-25T00:00:00.000Z", field: "high", bound: false },
+        extreme: { value: "0.95400000", at: "2026-08-22T00:00:00.000Z", candleOpen: "2026-08-22T00:00:00.000Z", field: "high", bound: true },
+        windowHigh: { value: "0.85750000", at: "2026-08-23T00:00:00.000Z", candleOpen: "2026-08-23T00:00:00.000Z", field: "high", bound: false },
         windowLow: null,
         maxHigh: null,
         minLow: null,
@@ -182,11 +182,70 @@ describe("stored price path", () => {
       },
     });
     expect(shownActual(view)).toEqual({
-      value: "0.8349",
-      at: "2026-08-25T00:00:00.000Z",
       field: "high",
-      bound: false,
+      reached: null,
+      bound: { value: "0.95400000", at: "2026-08-22T00:00:00.000Z" },
+      inWindow: { value: "0.85750000", at: "2026-08-23T00:00:00.000Z" },
     });
+  });
+
+  it("states an in-window high as reached when the extreme is not a bound", () => {
+    const view = detail({
+      actual: {
+        extreme: { value: "0.77960000", at: "2026-07-22T00:00:00.000Z", candleOpen: "2026-07-22T00:00:00.000Z", field: "high", bound: false },
+        windowHigh: { value: "0.77960000", at: "2026-07-22T00:00:00.000Z", candleOpen: "2026-07-22T00:00:00.000Z", field: "high", bound: false },
+        windowLow: null,
+        maxHigh: null,
+        minLow: null,
+        highAtMost: null,
+        lowAtLeast: null,
+        decidingCandles: [],
+        unreadableDigests: [],
+        granularity: "1d",
+        net: null,
+      },
+    });
+    expect(shownActual(view)?.reached).toEqual({ value: "0.77960000", at: "2026-07-22T00:00:00.000Z" });
+    expect(shownActual(view)?.bound).toBeNull();
+  });
+
+  it("does not connect a daily candle to hourly candles", () => {
+    const view = detail({
+      actual: {
+        extreme: null,
+        windowHigh: null,
+        windowLow: null,
+        maxHigh: null,
+        minLow: null,
+        highAtMost: null,
+        lowAtLeast: null,
+        decidingCandles: [
+          { openTime: "2026-10-05T00:00:00.000Z", closeTime: "2026-10-06T00:00:00.000Z", high: "1.10", low: "1.00", role: "interior", usedAs: "establishes" },
+          { openTime: "2026-10-06T00:00:00.000Z", closeTime: "2026-10-06T01:00:00.000Z", high: "1.11", low: "1.08", role: "refined", usedAs: "establishes" },
+          { openTime: "2026-10-06T03:00:00.000Z", closeTime: "2026-10-06T04:00:00.000Z", high: "1.20", low: "1.12", role: "refined", usedAs: "establishes" },
+        ],
+        unreadableDigests: [],
+        granularity: "1h",
+        net: null,
+      },
+    });
+    expect(pricePath(view)?.points).toEqual([
+      { at: "2026-10-06T00:00:00.000Z", value: 1.11 },
+      { at: "2026-10-06T03:00:00.000Z", value: 1.2 },
+    ]);
+  });
+});
+
+describe("timeFraction", () => {
+  it("places a point by elapsed time, not by its index", () => {
+    const points = [
+      { at: "2026-10-05T00:00:00.000Z" },
+      { at: "2026-10-06T00:00:00.000Z" },
+      { at: "2026-10-08T00:00:00.000Z" },
+    ];
+    expect(timeFraction(points[1]!.at, points)).toBeCloseTo(1 / 3);
+    expect(timeFraction(points[0]!.at, points)).toBe(0);
+    expect(timeFraction(points[2]!.at, points)).toBe(1);
   });
 });
 
