@@ -12,6 +12,7 @@ const VERBS = [
   "could signal",
   "could confirm",
   "could open",
+  "could target",
   "would bring",
   "may bring",
 ] as const;
@@ -22,25 +23,55 @@ export interface IgnoredCondition {
   verbAt: number;
 }
 
-export function ignoredCondition(quote: string): IgnoredCondition | null {
+function findVerb(quote: string): { at: number; len: number } | null {
   const lower = quote.toLowerCase();
-  let verbAt = -1;
-  let verbLen = 0;
+  let best: { at: number; len: number } | null = null;
   for (const verb of VERBS) {
     const at = lower.indexOf(verb);
-    if (at !== -1 && (verbAt === -1 || at < verbAt)) {
-      verbAt = at;
-      verbLen = verb.length;
-    }
+    if (at !== -1 && (!best || at < best.at)) best = { at, len: verb.length };
   }
-  if (verbAt === -1) return null;
-  const before = quote.slice(0, verbAt);
+  return best;
+}
+
+/** A leading or mid-quote "If …" precondition, not the word inside another token. */
+function findIf(quote: string): { at: number; len: number } | null {
+  const match = /\bif\b/i.exec(quote);
+  if (!match) return null;
+  return { at: match.index, len: match[0].length };
+}
+
+function clauseStart(quote: string, at: number): number {
+  const before = quote.slice(0, at);
   let from = 0;
   for (const token of [". ", ".\n", "! ", "!\n", "? ", "?\n", "\n"]) {
-    const at = before.lastIndexOf(token);
-    if (at !== -1) from = Math.max(from, at + token.length);
+    const found = before.lastIndexOf(token);
+    if (found !== -1) from = Math.max(from, found + token.length);
   }
-  const text = quote.slice(from, verbAt + verbLen).replace(/\s+/g, " ").trim();
+  return from;
+}
+
+export function ignoredCondition(quote: string): IgnoredCondition | null {
+  const verb = findVerb(quote);
+  const iff = findIf(quote);
+  if (!verb && !iff) return null;
+
+  // The verb is the split between the precondition and the target. An If-clause
+  // with no such verb ends at the comma, so "$1.00" stays in the condition
+  // and a later target does not.
+  let verbAt: number;
+  let verbEnd: number;
+  if (verb) {
+    verbAt = verb.at;
+    verbEnd = verb.at + verb.len;
+  } else {
+    const comma = quote.indexOf(",", iff!.at);
+    verbAt = comma === -1 ? quote.length : comma;
+    verbEnd = verbAt;
+  }
+
+  let from = clauseStart(quote, verbAt);
+  if (iff && iff.at >= from && iff.at <= verbAt) from = iff.at;
+  const text = quote.slice(from, verbEnd).replace(/\s+/g, " ").trim();
   if (!text) return null;
   return { text, verbAt };
 }

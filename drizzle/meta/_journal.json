@@ -43,6 +43,13 @@
       "when": 1792800000000,
       "tag": "0005_category_scores",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0006_claim_published_at",
+      "breakpoints": true
     }
   ]
 }

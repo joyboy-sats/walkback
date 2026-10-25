@@ -82,7 +82,7 @@ export function claimMemory(
   },
   extracted: ExtractedClaim,
   snapshot: BalanceSnapshot | null,
-  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string; deadlineBasis?: string },
+  opts?: { synthetic?: boolean; externalId?: string; sourceUrl?: string; deadlineBasis?: string; publishedAt?: string },
 ): { text: string; key: string } {
   const snapLine = snapshot
     ? `At ingest, ${snapshot.address} held ${snapshot.balance} base units of ` +
@@ -97,6 +97,11 @@ export function claimMemory(
     : "";
   const sourceLine = opts?.sourceUrl ? `Original post: ${opts.sourceUrl}. ` : "";
   const basisLine = opts?.deadlineBasis ? `Deadline basis: ${opts.deadlineBasis}. ` : "";
+  const publishedIso =
+    opts?.publishedAt && !Number.isNaN(Date.parse(opts.publishedAt))
+      ? new Date(opts.publishedAt).toISOString()
+      : null;
+  const publishedLine = publishedIso ? `Published at ${publishedIso}. ` : "";
 
   return {
     key: `claim:${claim.id}`,
@@ -106,6 +111,7 @@ export function claimMemory(
       `${syntheticLine}` +
       `${sourceLine}` +
       `${basisLine}` +
+      `${publishedLine}` +
       `Recorded as a ${claim.claimType} claim with ${claim.confidence.toFixed(2)} ` +
       `extraction confidence. ${snapLine}\n\n` +
       payload({
@@ -122,6 +128,7 @@ export function claimMemory(
         ...(opts?.externalId ? { external_id: opts.externalId } : {}),
         ...(opts?.sourceUrl ? { source_url: opts.sourceUrl } : {}),
         ...(opts?.deadlineBasis ? { deadline_basis: opts.deadlineBasis } : {}),
+        ...(publishedIso ? { published_at: publishedIso } : {}),
       }),
   };
 }

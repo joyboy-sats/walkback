@@ -25,6 +25,11 @@ export interface ClaimViewInput {
   deadline: string | null;
   deadlineBasis: string | null;
   claimBlobId: string | null;
+  /**
+   * When the post was published. Null when neither the claim row nor the seed
+   * file has that time. This is never `params.since`.
+   */
+  publishedAt?: string | null;
   resolution: {
     outcome: Outcome;
     reason: string;
@@ -58,13 +63,37 @@ export interface ActualExtreme {
   bound: boolean | null;
 }
 
+/** One candle the stored verdict named. Fields that were not stored are omitted by dropping the candle. */
+export interface DecidingCandleView {
+  openTime: string;
+  closeTime: string;
+  high: string;
+  low: string;
+  role: string;
+  usedAs: string;
+}
+
+/**
+ * A Tatum reference built only from stored evidence.
+ *
+ * `request` is a call whose endpoint and params are recoverable (the single
+ * deadline candle). `data_source` is a label: touch claims were read with
+ * `/OHLCV/batch` (`timeFrom` + `numberOfCandles`) and those page bounds are
+ * not stored, so they are not invented here.
+ */
+export type TatumReference =
+  | { kind: "request"; endpoint: string; params: Record<string, string> }
+  | { kind: "data_source"; label: string; requests: number | null };
+
 export interface ClaimDetail {
   id: string;
   quote: string;
   claimType: string;
   status: string;
-  /** `params.since` when it is a timestamp. Not the row's insert time. */
+  /** Post time. Null when it was not stored. Never the replay or touch window start. */
   publishedAt: string | null;
+  /** `params.since` when it is a timestamp. For `tx_replay` this is the window start. */
+  windowStart: string | null;
   deadline: string | null;
   parsed: ParsedClaim;
   expected: string | null;
@@ -73,6 +102,13 @@ export interface ClaimDetail {
     /** Max or min inside the window when the evidence stored one. */
     windowHigh: ActualExtreme | null;
     windowLow: ActualExtreme | null;
+    maxHigh: ActualExtreme | null;
+    minLow: ActualExtreme | null;
+    highAtMost: ActualExtreme | null;
+    lowAtLeast: ActualExtreme | null;
+    decidingCandles: DecidingCandleView[];
+    /** Digests a `tx_replay` could not read. Empty when the evidence stored none. */
+    unreadableDigests: string[];
     granularity: string | null;
     net: string | null;
   } | null;
@@ -83,7 +119,7 @@ export interface ClaimDetail {
     resolutionBlobId: string | null;
     url: null;
   };
-  tatum: { endpoint: string; params: Record<string, string | number> } | null;
+  tatum: TatumReference | null;
   outcome: Outcome | null;
   reason: string | null;
 }
@@ -148,36 +184,118 @@ function transactionsOf(evidence: Record<string, unknown> | null, claimType: str
   return out;
 }
 
-function tatumOf(evidence: Record<string, unknown> | null): ClaimDetail["tatum"] {
+const OHLCV_AT = "GET /v4/data/rate/symbol/OHLCV";
+const PRICE_INTERVALS = new Set(["1m", "1h", "1d"]);
+
+/** Same string `getOhlcvAt` puts in the `time` query. Milliseconds of zero are omitted. */
+function queryTime(isoTime: string): string {
+  return isoTime.replace(/\.000Z$/, "Z");
+}
+
+function requestsOf(evidence: Record<string, unknown>): number | null {
+  return typeof evidence.requests === "number" && Number.isFinite(evidence.requests) ? evidence.requests : null;
+}
+
+function refinedPass(evidence: Record<string, unknown>): boolean {
+  if (!Array.isArray(evidence.decidingCandles)) return false;
+  return evidence.decidingCandles.some((item) => rec(item)?.role === "refined");
+}
+
+function dataSource(evidence: Record<string, unknown>): TatumReference {
+  const symbol = text(evidence.symbol) ?? "SUI";
+  const quoteCcy = text(evidence.quote) ?? "USD";
+  const interval = text(evidence.interval);
+  const grain = interval ? `${interval} candles` : "candles";
+  let label = `Tatum OHLCV ${symbol}/${quoteCcy}, ${grain}`;
+  if (refinedPass(evidence)) label += "; coarse-to-fine, batch bounds not stored";
+  return { kind: "data_source", label, requests: requestsOf(evidence) };
+}
+
+function evaluationOf(
+  params: Record<string, unknown>,
+  evidence: Record<string, unknown> | null,
+): "touch" | "at_deadline" | null {
+  const fromParams = params.evaluation;
+  if (fromParams === "touch" || fromParams === "at_deadline") return fromParams;
+  const fromEvidence = evidence?.evaluation;
+  if (fromEvidence === "touch" || fromEvidence === "at_deadline") return fromEvidence;
+  return null;
+}
+
+/**
+ * Touch pages are `GET /OHLCV/batch` with `timeFrom` and `numberOfCandles`.
+ * Those arguments are not on the evidence row. Reporting them as a single
+ * `/OHLCV` call with `timeFrom`/`timeTo` would describe a request that did
+ * not happen. A deadline print is one `/OHLCV` call and those three params
+ * are stored.
+ */
+function tatumOf(
+  evidence: Record<string, unknown> | null,
+  evaluation: "touch" | "at_deadline" | null,
+): TatumReference | null {
   const source = text(evidence?.source);
-  if (!source || !source.startsWith("tatum:")) return null;
-  const path = source.slice("tatum:".length);
-  if (!path.startsWith("/")) return null;
-  const params: Record<string, string | number> = {};
-  const symbol = text(evidence?.symbol);
-  const interval = text(evidence?.interval);
-  if (symbol) params.symbol = symbol;
-  if (interval) params.interval = interval;
-  const window = rec(evidence?.window);
-  const from = iso(window?.from);
-  const to = iso(window?.to);
-  if (from) params.timeFrom = from;
-  if (to) params.timeTo = to;
-  const deadline = iso(evidence?.deadline);
-  if (!from && deadline) params.time = deadline;
-  if (typeof evidence?.requests === "number" && Number.isFinite(evidence.requests)) {
-    params.requests = evidence.requests;
+  if (!evidence || !source?.startsWith("tatum:")) return null;
+  const symbol = text(evidence.symbol);
+  const interval = text(evidence.interval);
+  const deadline = iso(evidence.deadline);
+  const requests = requestsOf(evidence);
+  const windowed = rec(evidence.window) !== null;
+  const candles = Array.isArray(evidence.decidingCandles) && evidence.decidingCandles.length > 0;
+  const single =
+    evaluation === "at_deadline" &&
+    !windowed &&
+    !candles &&
+    !refinedPass(evidence) &&
+    !text(evidence.intervalFallback) &&
+    (requests === null || requests === 1) &&
+    symbol !== null &&
+    interval !== null &&
+    PRICE_INTERVALS.has(interval) &&
+    deadline !== null;
+  if (single && symbol && interval && deadline) {
+    return {
+      kind: "request",
+      endpoint: OHLCV_AT,
+      params: { symbol, time: queryTime(deadline), interval },
+    };
   }
-  return { endpoint: `GET ${path}`, params };
+  return dataSource(evidence);
+}
+
+function decidingCandlesOf(value: unknown): DecidingCandleView[] {
+  if (!Array.isArray(value)) return [];
+  const out: DecidingCandleView[] = [];
+  for (const item of value) {
+    const row = rec(item);
+    if (!row) continue;
+    const openTime = iso(row.openTime);
+    const closeTime = iso(row.closeTime);
+    const high = scalar(row.high);
+    const low = scalar(row.low);
+    const role = text(row.role);
+    const usedAs = text(row.usedAs);
+    if (!openTime || !closeTime || !high || !low || !role || !usedAs) continue;
+    out.push({ openTime, closeTime, high, low, role, usedAs });
+  }
+  return out;
+}
+
+function digestsOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item.trim()) out.push(item.trim());
+  }
+  return out;
 }
 
 export function presentClaim(input: ClaimViewInput): ClaimDetail {
   const params = rec(input.params) ?? {};
   const evidence = rec(input.resolution?.evidence);
-  const evaluation =
-    params.evaluation === "touch" || params.evaluation === "at_deadline" ? params.evaluation : null;
+  const evaluation = evaluationOf(params, evidence);
   const direction = text(params.direction);
-  const publishedAt = iso(params.since);
+  const publishedAt = iso(input.publishedAt);
+  const windowStart = iso(params.since);
   const deadline = iso(input.deadline);
   const extreme = extremeOf(evidence?.extreme) ?? extremeOf(evidence?.deadlinePrice);
   const basisText = text(input.deadlineBasis) ?? text(evidence?.deadlineBasis);
@@ -190,13 +308,14 @@ export function presentClaim(input: ClaimViewInput): ClaimDetail {
     claimType: input.claimType,
     status: input.status,
     publishedAt,
+    windowStart,
     deadline,
     parsed: {
       symbol: text(params.symbol) ?? text(evidence?.symbol),
       quote: text(params.quote) ?? text(evidence?.quote),
       direction,
       target,
-      window: publishedAt || deadline ? { since: publishedAt, deadline } : null,
+      window: windowStart || deadline ? { since: windowStart, deadline } : null,
       evaluation,
       priceBasis: priceBasis(evaluation, direction, extreme?.field ?? null),
       deadlineBasis: basisText,
@@ -210,6 +329,12 @@ export function presentClaim(input: ClaimViewInput): ClaimDetail {
           extreme,
           windowHigh: extremeOf(evidence?.windowHigh),
           windowLow: extremeOf(evidence?.windowLow),
+          maxHigh: extremeOf(evidence?.maxHigh),
+          minLow: extremeOf(evidence?.minLow),
+          highAtMost: extremeOf(evidence?.highAtMost),
+          lowAtLeast: extremeOf(evidence?.lowAtLeast),
+          decidingCandles: decidingCandlesOf(evidence?.decidingCandles),
+          unreadableDigests: digestsOf(evidence?.unreadableDigests),
           granularity: text(evidence?.interval),
           net: scalar(evidence?.net),
         }
@@ -221,7 +346,7 @@ export function presentClaim(input: ClaimViewInput): ClaimDetail {
       resolutionBlobId: input.resolution?.blobId ?? null,
       url: null,
     },
-    tatum: tatumOf(evidence),
+    tatum: tatumOf(evidence, evaluation),
     outcome: input.resolution?.outcome ?? null,
     reason: input.resolution?.reason ?? null,
   };

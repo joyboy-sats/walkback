@@ -6,6 +6,7 @@
  */
 import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import { presentClaim, type ClaimDetail } from "./claim-view";
+import { seedPublishedAt } from "./post-time";
 import { foldVerdicts } from "./category-score";
 import { getDb, schema } from "./db";
 import {
@@ -28,6 +29,16 @@ export interface FeedResolution {
 }
 
 const FEED_LIMIT = 100;
+
+/** Column when it is set, otherwise the seed file. Never `params.since`. */
+function shownPublishedAt(claim: {
+  publishedAt: Date | null;
+  externalId: string | null;
+  sourceUrl: string | null;
+}): string | null {
+  if (claim.publishedAt && !Number.isNaN(claim.publishedAt.getTime())) return claim.publishedAt.toISOString();
+  return seedPublishedAt(claim.externalId, claim.sourceUrl);
+}
 
 /** Latest row wins. A re-resolve updates the row; this still prefers the newest if more than one exists. */
 export function latestResolution<T extends { claimId: string; resolvedAt: Date }>(
@@ -186,6 +197,7 @@ export async function readFeed(): Promise<FeedView> {
       deadline: claim.deadline.toISOString(),
       deadlineBasis: claim.deadlineBasis,
       claimBlobId: claim.walrusBlobId,
+      publishedAt: shownPublishedAt(claim),
       resolution: resolution
         ? {
             outcome: resolution.outcome,
@@ -326,6 +338,7 @@ export async function readClaim(id: string): Promise<{
       deadline: row.claim.deadline.toISOString(),
       deadlineBasis: row.claim.deadlineBasis,
       claimBlobId: row.claim.walrusBlobId,
+      publishedAt: shownPublishedAt(row.claim),
       resolution: resolution
         ? {
             outcome: resolution.outcome,

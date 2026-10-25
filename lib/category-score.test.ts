@@ -103,14 +103,21 @@ describe("conditional claims in the seed file", () => {
 
   it("flags the hedged targets and does not treat the stored amount as the precondition", () => {
     expect(flagged.map((row) => `${row.handle}:${row.amount}:${row.wouldChange}`)).toEqual([
+      "WaheiMagokoro:2:false",
       "cryptowithgopal:1.28:false",
       "cryptowithgopal:1.05:false",
       "cryptowithgopal:0.72:false",
       "cryptowithgopal:1.0:false",
     ]);
+    const wahei = flagged.find((row) => row.handle === "WaheiMagokoro");
+    expect(wahei?.condition.startsWith("If ")).toBe(true);
+    expect(wahei?.condition).toContain("could target");
+    expect(wahei?.condition).toContain("1.00");
+    expect(wahei?.condition).not.toContain("2.00");
     expect(flagged.every((row) => row.wouldChange === false)).toBe(true);
-    expect(flagged[0]?.condition).toContain("could trigger");
-    expect(flagged[0]?.condition).toContain("1.08");
+    const breakout = flagged.find((row) => row.amount === "1.28");
+    expect(breakout?.condition).toContain("could trigger");
+    expect(breakout?.condition).toContain("1.08");
   });
 
   it("would change only a row whose stored amount is the precondition", () => {
@@ -119,5 +126,9 @@ describe("conditional claims in the seed file", () => {
     expect(conditionWouldChange(quote, "1.28")).toBe(false);
     expect(conditionWouldChange(quote, "1.08")).toBe(true);
     expect(conditionWouldChange("SUI to $2 by July", "2")).toBe(false);
+    const wahei =
+      "If $SUI holds firmly above the key psychological  level around $1.00 this week, the short-term upside over the next few weeks could target $2.00";
+    expect(conditionWouldChange(wahei, "2")).toBe(false);
+    expect(conditionWouldChange(wahei, "1.00")).toBe(true);
   });
 });

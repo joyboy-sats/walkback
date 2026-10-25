@@ -23,6 +23,7 @@ import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
 import { foldVerdicts, type MuteBasis } from "./category-score";
 import { applyOutcome, computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
+import { seedPublishedAt } from "./post-time";
 import {
   contentPlan,
   finishInventory,
@@ -195,6 +196,7 @@ export interface RebuiltClaim {
   externalId: string | null;
   sourceUrl: string | null;
   deadlineBasis: string | null;
+  publishedAt: string | null;
   walrusBlobId: string;
   createdAt: string;
 }
@@ -1331,6 +1333,7 @@ async function applyProjection(p: Projection): Promise<void> {
           externalId: c.externalId,
           sourceUrl: c.sourceUrl,
           deadlineBasis: c.deadlineBasis,
+          publishedAt: c.publishedAt ? new Date(c.publishedAt) : null,
           createdAt: new Date(c.createdAt),
           walrusBlobId: c.walrusBlobId,
         })),
@@ -1471,6 +1474,15 @@ function addSource(
   byHandle.set(handle, row);
 }
 
+function publishedAtFrom(payload: Record<string, unknown>): string | null {
+  if (typeof payload.published_at === "string" && !Number.isNaN(Date.parse(payload.published_at))) {
+    return new Date(payload.published_at).toISOString();
+  }
+  const externalId = typeof payload.external_id === "string" ? payload.external_id : null;
+  const sourceUrl = typeof payload.source_url === "string" ? payload.source_url : null;
+  return seedPublishedAt(externalId, sourceUrl);
+}
+
 function addClaim(
   mem: GatheredMemory,
   payload: Record<string, unknown>,
@@ -1510,6 +1522,7 @@ function addClaim(
       typeof payload.deadline_basis === "string" && payload.deadline_basis.trim()
         ? payload.deadline_basis.trim().slice(0, 160)
         : null,
+    publishedAt: publishedAtFrom(payload),
     walrusBlobId: mem.blobId,
     createdAt: mem.createdAt ?? new Date(0).toISOString(),
   });

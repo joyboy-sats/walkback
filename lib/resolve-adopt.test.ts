@@ -334,7 +334,7 @@ describe("resolveClaim adoption", () => {
     );
     const report = await resolveClaim(CLAIM_ID, new Date(), { reconcile: true });
     expect(adjudicateMock).not.toHaveBeenCalled();
-    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
+    expect(report.skipped).toBe("stored resolution matches; wording differs");
     expect(report.outcome).toBe("false");
     expect(report.reason).toBe("stored reason");
     const keys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
@@ -399,7 +399,7 @@ describe("resolveClaim adoption", () => {
     expect(adjudicateMock).not.toHaveBeenCalled();
     expect(report.outcome).toBe("false");
     expect(report.reason).toBe("stored reason");
-    expect(report.skipped).toBe("projected stored resolution; recorded verdict differed");
+    expect(report.skipped).toBe("stored resolution matches; wording differs");
     expect(updates.some((values) => values.reason === "stored reason" && values.walrusBlobId === "blob-old")).toBe(true);
     const resolutionKeys = memwalMock.writeMemoriesDurable.mock.calls.flatMap((call) =>
       (call[0] as Array<{ idempotencyKey: string }>)

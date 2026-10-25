@@ -282,9 +282,9 @@ async function resolveClaimBody(
         `${context.handle} ${claim.id}${externalSuffix(context)}: ${resolutionText.key} was logged during adjudication, but recall could not read it. Claim left pending.`,
       );
     }
-    const disagreed = verdictDiffers(stored, verdict);
-    if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
-    return adoptStored(claim, source, context, stored, now, disagreed);
+    const gap = verdictGap(stored, verdict);
+    warnVerdictGap(context, stored, verdict, "adjudicated", gap);
+    return adoptStored(claim, source, context, stored, now, gap);
   }
 
   const pending = pendingWrites(writes, known);
@@ -307,9 +307,9 @@ async function resolveClaimBody(
           cause ? { cause } : undefined,
         );
       }
-      const disagreed = verdictDiffers(stored, verdict);
-      if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
-      return adoptStored(claim, source, context, stored, now, disagreed);
+      const gap = verdictGap(stored, verdict);
+      warnVerdictGap(context, stored, verdict, "adjudicated", gap);
+      return adoptStored(claim, source, context, stored, now, gap);
     }
     if (conflict && scorePlan?.write && blobs.has(resolutionText.key)) {
       const adopted = await recallScore(source.id, source.handle, claim.id);
@@ -547,6 +547,7 @@ export async function persistClaimMemories(claimId: string): Promise<string | un
       ...(row.claim.externalId ? { externalId: row.claim.externalId } : {}),
       ...(row.claim.sourceUrl ? { sourceUrl: row.claim.sourceUrl } : {}),
       ...(row.claim.deadlineBasis ? { deadlineBasis: row.claim.deadlineBasis } : {}),
+      ...(row.claim.publishedAt ? { publishedAt: row.claim.publishedAt.toISOString() } : {}),
     },
   );
 
@@ -644,10 +645,16 @@ function memoryEvidence(evidence: unknown): Record<string, unknown> {
   return copy;
 }
 
-/** Outcome and reason. Candle evidence can differ without this being a different verdict. */
-function verdictDiffers(a: { outcome: string; reason: string }, b: { outcome: string; reason: string }): boolean {
-  return a.outcome !== b.outcome || a.reason !== b.reason;
+/** Outcome is the verdict. A different sentence with the same outcome is wording. */
+type VerdictGap = "outcome" | "wording" | "none";
+
+function verdictGap(a: { outcome: string; reason: string }, b: { outcome: string; reason: string }): VerdictGap {
+  if (a.outcome !== b.outcome) return "outcome";
+  if (a.reason !== b.reason) return "wording";
+  return "none";
 }
+
+const WORDING_DIFFERS = "stored resolution matches; wording differs";
 
 function warnResolutionDisagreement(
   context: ClaimLogContext,
@@ -658,6 +665,28 @@ function warnResolutionDisagreement(
   console.warn(
     `[resolve] ${context.handle} ${context.claimId}${externalSuffix(context)}: Walrus ${resolutionIdempotencyKey(context.claimId, stored.revision)} is ${stored.outcome} (${stored.reason}). The ${which} verdict was ${recorded.outcome} (${recorded.reason}). Postgres will follow the stored memory.`,
   );
+}
+
+function warnWordingDifference(
+  context: ClaimLogContext,
+  stored: StoredResolution,
+  recorded: { reason: string },
+  which: "adjudicated" | "recorded",
+): void {
+  console.warn(
+    `[resolve] ${context.handle} ${context.claimId}${externalSuffix(context)}: ${WORDING_DIFFERS}. Walrus said "${stored.reason}". The ${which} wording was "${recorded.reason}". Postgres will follow the stored memory.`,
+  );
+}
+
+function warnVerdictGap(
+  context: ClaimLogContext,
+  stored: StoredResolution,
+  recorded: { outcome: string; reason: string },
+  which: "adjudicated" | "recorded",
+  gap: VerdictGap,
+): void {
+  if (gap === "outcome") warnResolutionDisagreement(context, stored, recorded, which);
+  else if (gap === "wording") warnWordingDifference(context, stored, recorded, which);
 }
 
 function assertScoreMatches(
@@ -911,8 +940,8 @@ async function projectStoredResolution(
     reason: existing.reason,
     evidence: memoryEvidence(existing.evidence),
   });
-  const verdictChanged = verdictDiffers(stored, existing);
-  if (verdictChanged) warnResolutionDisagreement(context, stored, existing, "recorded");
+  const gap = verdictGap(stored, existing);
+  warnVerdictGap(context, stored, existing, "recorded", gap);
   await logMemories(
     [
       {
@@ -955,11 +984,14 @@ async function projectStoredResolution(
       resolution: stored.blobId,
       ...(score.writtenBlob ? { score: score.writtenBlob } : {}),
     },
-    skipped: verdictChanged
-      ? "projected stored resolution; recorded verdict differed"
-      : matches
-        ? "repaired resolution link"
-        : "stored resolution matches",
+    skipped:
+      gap === "outcome"
+        ? "projected stored resolution; recorded verdict differed"
+        : gap === "wording"
+          ? WORDING_DIFFERS
+          : matches
+            ? "repaired resolution link"
+            : "stored resolution matches",
   };
 }
 
@@ -1199,7 +1231,7 @@ async function adoptStored(
   context: ClaimLogContext,
   stored: StoredResolution,
   now: Date,
-  disagreed = false,
+  gap: VerdictGap = "none",
 ): Promise<ResolveReport> {
   const key = resolutionIdempotencyKey(claim.id, stored.revision);
   await logMemories(
@@ -1248,7 +1280,7 @@ async function adoptStored(
     }
   }
 
-  return finishAdopt(claim, source, context, stored, now, before, score, writtenBlob, disagreed);
+  return finishAdopt(claim, source, context, stored, now, before, score, writtenBlob, gap);
 }
 
 async function finishAdopt(
@@ -1260,7 +1292,7 @@ async function finishAdopt(
   before: ScoreSnapshot,
   score: ScorePlan | null,
   writtenBlob: string | null,
-  disagreed = false,
+  gap: VerdictGap = "none",
 ): Promise<ResolveReport> {
   const committed = await commitVerdict({
     claimId: claim.id,
@@ -1288,7 +1320,12 @@ async function finishAdopt(
       resolution: stored.blobId,
       ...(committed.scoreBlob ? { score: committed.scoreBlob } : {}),
     },
-    skipped: disagreed ? "projected stored resolution; adjudicated verdict differed" : "adopted stored resolution",
+    skipped:
+      gap === "outcome"
+        ? "projected stored resolution; adjudicated verdict differed"
+        : gap === "wording"
+          ? WORDING_DIFFERS
+          : "adopted stored resolution",
   };
 }
 

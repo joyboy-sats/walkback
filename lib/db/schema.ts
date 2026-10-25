@@ -130,6 +130,12 @@ export const claims = pgTable(
      * existed. The resolver does not read it to choose a time.
      */
     deadlineBasis: text("deadline_basis"),
+    /**
+     * When the post was published. Null on rows written before the column
+     * existed, and on pasted claims that did not send a time. This is not
+     * `params.since`, which is the check window.
+     */
+    publishedAt: timestamp("published_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     walrusBlobId: text("walrus_blob_id"),
   },
