@@ -10,7 +10,7 @@
  */
 import { getLocale, getTranslations } from "next-intl/server";
 import { apiGet } from "@/lib/public-api";
-import { includeMutedParam, visibleClaims, type LedgerView } from "@/lib/ledger";
+import { feedRows, includeMutedParam, visibleClaims, type LedgerView } from "@/lib/ledger";
 import { MIN_SAMPLE, TRUST_MUTED, TRUST_TRUSTED, scoreIsShown, trustBand } from "@/lib/score";
 import { formatCount, formatDateOnly, formatFixed } from "@/lib/locale-format";
 import { isLocale, type Locale } from "@/lib/locale";
@@ -65,10 +65,10 @@ export default async function FeedPage({
   let ledger: LedgerView | null = null;
   let ledgerError: string | null = null;
   const [feedSettled, ledgerSettled] = await Promise.allSettled([
-    apiGet<FeedRow[]>("/feed"),
+    apiGet<FeedRow[] | { rows: FeedRow[] }>("/feed"),
     apiGet<LedgerView>("/ledger"),
   ]);
-  if (feedSettled.status === "fulfilled") rows = feedSettled.value;
+  if (feedSettled.status === "fulfilled") rows = feedRows(feedSettled.value);
   else loadError = feedSettled.reason instanceof Error ? feedSettled.reason.message : String(feedSettled.reason);
   if (ledgerSettled.status === "fulfilled") ledger = ledgerSettled.value;
   else ledgerError = ledgerSettled.reason instanceof Error ? ledgerSettled.reason.message : String(ledgerSettled.reason);

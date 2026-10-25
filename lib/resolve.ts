@@ -28,7 +28,8 @@ import { findPersistedKeys } from "./persisted-keys";
 import { recallMemory, writeMemoriesDurable, type MemoryWrite, type RecallHit } from "./memwal";
 import { gateClaimResolve } from "./resolve-lock";
 import { logMemories } from "./memory-log";
-import { claimMemory, resolutionMemory, scoreMemory } from "./memory-text";
+import { foldCategories, tallyCategories } from "./category-score";
+import { claimMemory, resolutionMemory, scoreMemory, type ScoreMemoryCategories } from "./memory-text";
 import { computeScore, replaceOutcome, type ScoreSnapshot } from "./score";
 import {
   resolutionIdempotencyKey,
@@ -266,7 +267,7 @@ async function resolveClaimBody(
     idempotencyKey: resolutionText.key,
   });
 
-  const scorePlan = await scoreForVerdict(source, claim.id, verdict.outcome, before, after);
+  const scorePlan = await scoreForVerdict(source, claim.id, verdict.outcome, before, after, claim.claimType);
   if (scorePlan?.write) writes.push(scorePlan.write);
 
   const known = await findPersistedKeys(writes);
@@ -281,7 +282,7 @@ async function resolveClaimBody(
         `${context.handle} ${claim.id}${externalSuffix(context)}: ${resolutionText.key} was logged during adjudication, but recall could not read it. Claim left pending.`,
       );
     }
-    const disagreed = !verdictMatches(stored, claim.id, verdict);
+    const disagreed = verdictDiffers(stored, verdict);
     if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
     return adoptStored(claim, source, context, stored, now, disagreed);
   }
@@ -306,7 +307,7 @@ async function resolveClaimBody(
           cause ? { cause } : undefined,
         );
       }
-      const disagreed = !verdictMatches(stored, claim.id, verdict);
+      const disagreed = verdictDiffers(stored, verdict);
       if (disagreed) warnResolutionDisagreement(context, stored, verdict, "adjudicated");
       return adoptStored(claim, source, context, stored, now, disagreed);
     }
@@ -643,17 +644,9 @@ function memoryEvidence(evidence: unknown): Record<string, unknown> {
   return copy;
 }
 
-function verdictMatches(
-  stored: StoredResolution,
-  claimId: string,
-  verdict: { outcome: Outcome; reason: string; evidence: unknown },
-): boolean {
-  return resolutionContentMatches(stored, {
-    claimId,
-    outcome: verdict.outcome,
-    reason: verdict.reason,
-    evidence: verdict.evidence,
-  });
+/** Outcome and reason. Candle evidence can differ without this being a different verdict. */
+function verdictDiffers(a: { outcome: string; reason: string }, b: { outcome: string; reason: string }): boolean {
+  return a.outcome !== b.outcome || a.reason !== b.reason;
 }
 
 function warnResolutionDisagreement(
@@ -722,6 +715,7 @@ async function scoreRepairPlan(
   claimId: string,
   recordedOutcome: Outcome,
   targetOutcome: Outcome,
+  claimType: string,
 ): Promise<{ plan: ScorePlan | null; stampVersion: number | null }> {
   const triggered = await triggeredScore(claimId, source.id);
   const previous = triggered ? recordedOutcome : null;
@@ -733,7 +727,7 @@ async function scoreRepairPlan(
     after = before;
   }
   if (after.hits !== before.hits || after.misses !== before.misses) {
-    return { plan: await scoreForVerdict(source, claimId, targetOutcome, before, after), stampVersion: null };
+    return { plan: await scoreForVerdict(source, claimId, targetOutcome, before, after, claimType), stampVersion: null };
   }
   if (triggered && !triggered.blob) {
     const snap = computeScore(triggered.hits, triggered.misses);
@@ -861,7 +855,7 @@ async function attachRepairScore(
   recordedOutcome: Outcome,
   targetOutcome: Outcome,
 ): Promise<{ plan: ScorePlan | null; stampVersion: number | null; writtenBlob: string | null }> {
-  const score = await scoreRepairPlan(source, claim.id, recordedOutcome, targetOutcome);
+  const score = await scoreRepairPlan(source, claim.id, recordedOutcome, targetOutcome, claim.claimType);
   if (!score.plan?.write) {
     return { plan: score.plan, stampVersion: score.stampVersion, writtenBlob: score.plan?.adopted?.blobId ?? null };
   }
@@ -917,7 +911,8 @@ async function projectStoredResolution(
     reason: existing.reason,
     evidence: memoryEvidence(existing.evidence),
   });
-  if (!matches) warnResolutionDisagreement(context, stored, existing, "recorded");
+  const verdictChanged = verdictDiffers(stored, existing);
+  if (verdictChanged) warnResolutionDisagreement(context, stored, existing, "recorded");
   await logMemories(
     [
       {
@@ -960,7 +955,11 @@ async function projectStoredResolution(
       resolution: stored.blobId,
       ...(score.writtenBlob ? { score: score.writtenBlob } : {}),
     },
-    skipped: matches ? "repaired resolution link" : "projected stored resolution; recorded verdict differed",
+    skipped: verdictChanged
+      ? "projected stored resolution; recorded verdict differed"
+      : matches
+        ? "repaired resolution link"
+        : "stored resolution matches",
   };
 }
 
@@ -1099,12 +1098,33 @@ async function latestScore(sourceId: string): Promise<{ version: number; score: 
   return last ?? null;
 }
 
+async function categoryMemory(
+  sourceId: string,
+  pending: { claimId: string; claimType: string; outcome: Outcome },
+): Promise<ScoreMemoryCategories | null> {
+  const rows = await getDb()
+    .select({
+      claimId: schema.resolutions.claimId,
+      claimType: schema.claims.claimType,
+      outcome: schema.resolutions.outcome,
+      resolvedAt: schema.resolutions.resolvedAt,
+    })
+    .from(schema.resolutions)
+    .innerJoin(schema.claims, eq(schema.claims.id, schema.resolutions.claimId))
+    .where(eq(schema.claims.sourceId, sourceId));
+  const counts = tallyCategories(rows, pending);
+  if (!counts) return null;
+  const folded = foldCategories(counts, 0, 0);
+  return { reporting: folded.reporting, forecast: folded.forecast, muteBasis: folded.muteBasis };
+}
+
 async function scoreForVerdict(
   source: { id: string; handle: string },
   claimId: string,
   outcome: Outcome,
   before: ScoreSnapshot,
   after: ScoreSnapshot,
+  claimType?: string,
 ): Promise<ScorePlan | null> {
   if (after.hits === before.hits && after.misses === before.misses) return null;
   const stored = await recallScore(source.id, source.handle, claimId);
@@ -1116,6 +1136,7 @@ async function scoreForVerdict(
   }
   const version = (last?.version ?? 0) + 1;
   const reason = `claim resolved ${outcome}`;
+  const categories = claimType ? await categoryMemory(source.id, { claimId, claimType, outcome }) : null;
   const built = scoreMemory(
     {
       sourceId: source.id,
@@ -1126,6 +1147,7 @@ async function scoreForVerdict(
     },
     after,
     last?.score ?? null,
+    categories,
   );
   const known = await findPersistedKeys([{ idempotencyKey: built.key }]);
   if (known.has(built.key)) {
@@ -1172,7 +1194,7 @@ function storedResolvedAt(stored: StoredResolution, now: Date): Date {
 }
 
 async function adoptStored(
-  claim: { id: string },
+  claim: { id: string; claimType: string },
   source: { id: string; handle: string; hits: number; misses: number; score: number },
   context: ClaimLogContext,
   stored: StoredResolution,
@@ -1187,7 +1209,7 @@ async function adoptStored(
 
   const before = computeScore(source.hits, source.misses);
   const after = replaceOutcome(source.hits, source.misses, null, stored.outcome);
-  let score = await scoreForVerdict(source, claim.id, stored.outcome, before, after);
+  let score = await scoreForVerdict(source, claim.id, stored.outcome, before, after, claim.claimType);
   let writtenBlob: string | null = null;
   if (score?.write) {
     try {
@@ -1358,13 +1380,33 @@ async function commitVerdict(input: CommitInput): Promise<CommitResult> {
         reason: input.score.reason,
         walrusBlobId: input.score.blobId,
       });
+      const categoryRows = await tx
+        .select({
+          claimId: schema.resolutions.claimId,
+          claimType: schema.claims.claimType,
+          outcome: schema.resolutions.outcome,
+          resolvedAt: schema.resolutions.resolvedAt,
+        })
+        .from(schema.resolutions)
+        .innerJoin(schema.claims, eq(schema.claims.id, schema.resolutions.claimId))
+        .where(eq(schema.claims.sourceId, input.sourceId));
+      const counts = tallyCategories(categoryRows);
+      const folded = counts ? foldCategories(counts, input.score.hits, input.score.misses) : null;
       await tx
         .update(schema.sources)
         .set({
           hits: input.score.hits,
           misses: input.score.misses,
           score: input.score.score,
-          muted: input.score.band === "muted",
+          muted: folded ? folded.muted : input.score.band === "muted",
+          ...(folded
+            ? {
+                reportingHits: counts!.reportingHits,
+                reportingMisses: counts!.reportingMisses,
+                forecastHits: counts!.forecastHits,
+                forecastMisses: counts!.forecastMisses,
+              }
+            : {}),
         })
         .where(eq(schema.sources.id, input.sourceId));
     }

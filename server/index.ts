@@ -8,6 +8,7 @@
  *   GET  /health
  *   GET  /feed
  *   GET  /ledger
+ *   GET  /claims/:id
  *   GET  /sources/:id
  *   GET  /memory
  *   GET  /jobs/:id
@@ -22,7 +23,7 @@ import { boot } from "../backend/boot";
 import { ingestBody } from "../lib/ingest-body";
 import { enqueueJob, readJob } from "../lib/job-queue";
 import { corsHeaders, preflightStatus, tokenMatches } from "../lib/http-guard";
-import { claimsForSourceUrls, readFeed, readLedger, readMemory, readSource } from "../lib/reads";
+import { claimsForSourceUrls, readClaim, readFeed, readLedger, readMemory, readSource } from "../lib/reads";
 import { NS } from "../lib/types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -139,6 +140,21 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
 
     if (req.method === "GET" && path === "/ledger") {
       send(res, 200, await readLedger(), cors);
+      return;
+    }
+
+    const claimId = path.match(/^\/claims\/([^/]+)$/)?.[1];
+    if (req.method === "GET" && claimId) {
+      if (!UUID.test(claimId)) {
+        send(res, 404, { error: "not found" }, cors);
+        return;
+      }
+      const claim = await readClaim(claimId);
+      if (!claim) {
+        send(res, 404, { error: "not found" }, cors);
+        return;
+      }
+      send(res, 200, claim, cors);
       return;
     }
 

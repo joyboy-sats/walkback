@@ -20,6 +20,7 @@ import "server-only";
 
 import { parseFencedJson } from "./stored-resolution";
 import { NS, type ClaimType, type Namespace, type Outcome } from "./types";
+import { foldVerdicts, type MuteBasis } from "./category-score";
 import { applyOutcome, computeScore, type TrustBand } from "./score";
 import { stableUuid } from "./ids";
 import {
@@ -172,6 +173,11 @@ export interface RebuiltSource {
   hitRate: number;
   band: TrustBand;
   muted: boolean;
+  reportingHits: number;
+  reportingMisses: number;
+  forecastHits: number;
+  forecastMisses: number;
+  muteBasis: MuteBasis;
 }
 
 export interface RebuiltClaim {
@@ -388,23 +394,25 @@ export function projectMemories(input: readonly GatheredMemory[]): Projection {
   }
 
   for (const source of sources.values()) {
-    let hits = 0;
-    let misses = 0;
+    const verdicts: Array<{ claimType: ClaimType; outcome: Outcome }> = [];
     for (const claim of claims.values()) {
       if (claim.sourceId !== source.id) continue;
       const resolution = resolutions.get(claim.id);
       if (!resolution || resolution.outcome === "void") continue;
-      if (resolution.outcome === "true") hits++;
-      else misses++;
+      verdicts.push({ claimType: claim.claimType, outcome: resolution.outcome });
     }
-    const score = computeScore(hits, misses);
-    source.hits = score.hits;
-    source.misses = score.misses;
-    source.score = score.score;
-    source.hitRate = score.hitRate;
-    source.band = score.band;
-    source.muted = score.band === "muted";
-
+    const folded = foldVerdicts(verdicts);
+    source.hits = folded.overall.hits;
+    source.misses = folded.overall.misses;
+    source.score = folded.overall.score;
+    source.hitRate = folded.overall.n === 0 ? 0 : folded.overall.hits / folded.overall.n;
+    source.band = folded.overall.band;
+    source.muted = folded.muted;
+    source.reportingHits = folded.reporting.hits;
+    source.reportingMisses = folded.reporting.misses;
+    source.forecastHits = folded.forecast.hits;
+    source.forecastMisses = folded.forecast.misses;
+    source.muteBasis = folded.muteBasis;
   }
 
   const scoreVersionsDerived = deriveScoreVersions({
@@ -1297,6 +1305,10 @@ async function applyProjection(p: Projection): Promise<void> {
           misses: s.misses,
           score: s.score,
           muted: s.muted,
+          reportingHits: s.reportingHits,
+          reportingMisses: s.reportingMisses,
+          forecastHits: s.forecastHits,
+          forecastMisses: s.forecastMisses,
           createdAt: new Date(s.createdAt),
           walrusBlobId: s.walrusBlobId,
         })),
@@ -1620,6 +1632,11 @@ function blankSource(id: string, handle: string, blobId: string, createdAt: stri
     hitRate: 0,
     band: "unknown",
     muted: false,
+    reportingHits: 0,
+    reportingMisses: 0,
+    forecastHits: 0,
+    forecastMisses: 0,
+    muteBasis: "reporting",
   };
 }
 

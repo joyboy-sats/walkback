@@ -36,6 +36,13 @@
       "when": 1792700000000,
       "tag": "0004_memwal_write_budget",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792800000000,
+      "tag": "0005_category_scores",
+      "breakpoints": true
     }
   ]
 }

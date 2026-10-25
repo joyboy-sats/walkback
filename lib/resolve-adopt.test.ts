@@ -344,6 +344,30 @@ describe("resolveClaim adoption", () => {
     expect(updates.some((values) => values.walrusBlobId === "blob-old" && values.reason === "stored reason")).toBe(true);
   });
 
+  it("does not say the verdict differed when the outcome and reason match", async () => {
+    state.resolutions = [{ ...recorded, reason: "stored reason" }];
+    memwalMock.recallMemory.mockImplementation(async (args: { namespace: string }) =>
+      args.namespace === "walkback.resolution" ? [hit("false")] : [],
+    );
+    memwalMock.writeMemoriesDurable.mockImplementation(
+      async (
+        items: Array<{ idempotencyKey: string }>,
+        onPersisted: (item: { idempotencyKey: string }, result: { blobId: string; id: string }) => Promise<void>,
+      ) => {
+        const item = items[0]!;
+        await onPersisted(item, { blobId: "blob-score", id: "job-score" });
+        return {};
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const report = await resolveClaim(CLAIM_ID, new Date(), { reconcile: true });
+    expect(report.skipped).toBe("stored resolution matches");
+    expect(report.outcome).toBe("false");
+    expect(report.reason).toBe("stored reason");
+    expect(warn.mock.calls.some((args) => String(args[0]).includes("recorded verdict"))).toBe(false);
+    warn.mockRestore();
+  });
+
   it("on a 409 while repairing, projects the stored memory and does not write a second resolution", async () => {
     state.resolutions = [{ ...recorded }];
     let resolutionReads = 0;

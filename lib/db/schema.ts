@@ -70,6 +70,16 @@ export const sources = pgTable(
     hits: integer("hits").notNull().default(0),
     misses: integer("misses").notNull().default(0),
     score: real("score").notNull().default(0),
+    /**
+     * Category counts. `hits` / `misses` / `score` stay the overall record so
+     * score-version replay still matches. `muted` follows forecast-primary:
+     * the forecast band when this source has a price verdict, else reporting.
+     * `npm run rescore` fills these from stored resolutions. No Tatum, no Walrus.
+     */
+    reportingHits: integer("reporting_hits").notNull().default(0),
+    reportingMisses: integer("reporting_misses").notNull().default(0),
+    forecastHits: integer("forecast_hits").notNull().default(0),
+    forecastMisses: integer("forecast_misses").notNull().default(0),
     /** Soft delete. Real deletion does not exist in Walrus Memory. */
     muted: boolean("muted").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

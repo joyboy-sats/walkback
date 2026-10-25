@@ -76,6 +76,57 @@ describe("buildLedger", () => {
     expect(view.sources[3]?.muted).toBe(false);
     expect(view.sources[3]?.claimTypes).toEqual(["price_threshold", "manual"]);
     expect(view.sources[4]?.claimTypes).toEqual([]);
+    expect(view.sources[0]?.muteBasis).toBeNull();
+    expect(view.sources[0]?.reporting).toBeNull();
+  });
+
+  it("shows the forecast record once a source has forecasts, and counts hidden misses", () => {
+    const view = buildLedger({
+      sources: [
+        {
+          ...source({ id: "watch", handle: "_OnChainWatch", hits: 11, misses: 3 }),
+          reportingHits: 11,
+          reportingMisses: 0,
+          forecastHits: 0,
+          forecastMisses: 3,
+        },
+        {
+          ...source({ id: "pure", handle: "onlyReports", hits: 11, misses: 0 }),
+          reportingHits: 11,
+          reportingMisses: 0,
+          forecastHits: 0,
+          forecastMisses: 0,
+        },
+      ],
+      claims: [
+        { sourceId: "watch", claimType: "tx_replay", status: "resolved", outcome: "true" },
+        { sourceId: "watch", claimType: "price_threshold", status: "resolved", outcome: "false" },
+        { sourceId: "watch", claimType: "price_threshold", status: "resolved", outcome: "false" },
+        { sourceId: "watch", claimType: "price_threshold", status: "resolved", outcome: "false" },
+        { sourceId: "pure", claimType: "tx_replay", status: "resolved", outcome: "true" },
+      ],
+      memoryInventory: 0,
+      latestVerifyResult: null,
+    });
+    const watch = view.sources.find((row) => row.handle === "_OnChainWatch");
+    const pure = view.sources.find((row) => row.handle === "onlyReports");
+    expect(watch?.muteBasis).toBe("forecast");
+    expect(watch?.band).toBe("muted");
+    expect(watch?.muted).toBe(true);
+    expect(watch?.hits).toBe(0);
+    expect(watch?.misses).toBe(3);
+    expect(watch?.reporting).toMatchObject({ hits: 11, misses: 0, band: "trusted" });
+    expect(watch?.overall?.band).toBe("normal");
+    expect(pure?.muteBasis).toBe("reporting");
+    expect(pure?.band).toBe("trusted");
+    expect(pure?.muted).toBe(false);
+    expect(view.totals.mutedSources).toBe(1);
+    expect(view.totals.hiddenClaims).toBe(4);
+    expect(view.totals.hiddenClaimsFalse).toBe(3);
+    expect(view.totals.visible.claims).toBe(1);
+    expect(view.totals.all.claims).toBe(5);
+    expect(view.totals.allIncludesMuted).toBe(true);
+    expect(view.totals.visibleIncludesMuted).toBe(false);
   });
 
   it("keeps an under-sampled mute unrated and visible", () => {
@@ -101,6 +152,14 @@ describe("buildLedger", () => {
       resolved: 5,
       pending: 2,
       void: 1,
+      muteRule: "forecast-primary",
+      allIncludesMuted: true,
+      visibleIncludesMuted: false,
+      all: { claims: 8, resolved: 5, pending: 2, void: 1 },
+      visible: { claims: 7, resolved: 4, pending: 2, void: 1 },
+      mutedSources: 1,
+      hiddenClaims: 1,
+      hiddenClaimsFalse: null,
       memories: { inventory: 48, verified: null },
     });
   });

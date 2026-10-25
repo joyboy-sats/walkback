@@ -23,6 +23,7 @@ import type {
   Outcome,
   SourceRef,
 } from "./types";
+import type { CategoryScore, MuteBasis } from "./category-score";
 import type { ScoreSnapshot } from "./score";
 
 /** Text that is too long for a memory is truncated at a sentence boundary. */
@@ -181,6 +182,21 @@ export function resolutionMemory(
 
 // ── score version ────────────────────────────────────────────────────────────
 
+export interface ScoreMemoryCategories {
+  reporting: CategoryScore;
+  forecast: CategoryScore;
+  muteBasis: MuteBasis;
+}
+
+/**
+ * Score memories are append-only. `hits` / `misses` / `score` stay the overall
+ * Wilson record so a replay of stored verdicts still matches blobs written
+ * before categories existed. Those blobs have no `schema_version`.
+ *
+ * A new write that knows the category counts uses schema_version 2 and adds
+ * `categories` and `mute_basis`. It does not rewrite or delete the older blob.
+ * The idempotency key stays `score:{sourceId}:v{n}`.
+ */
 export function scoreMemory(
   s: {
     sourceId: string;
@@ -191,13 +207,14 @@ export function scoreMemory(
   },
   score: ScoreSnapshot,
   previous: number | null,
+  categories?: ScoreMemoryCategories | null,
 ): { text: string; key: string } {
   const delta =
     previous === null
       ? `first recorded score`
       : `previously ${previous.toFixed(2)}, now ${score.score.toFixed(2)}`;
 
-  const bandLine =
+  const legacyBandLine =
     score.band === "muted"
       ? `This source is below the mute threshold and its claims no longer appear in the feed.`
       : score.band === "trusted"
@@ -205,6 +222,61 @@ export function scoreMemory(
         : score.band === "unknown"
           ? `Too few adjudicated claims to judge; shown without a trust badge.`
           : `This source appears normally.`;
+  const feedBand = categories
+    ? categories.muteBasis === "forecast"
+      ? categories.forecast.band
+      : categories.reporting.band
+    : score.band;
+  const bandLine = !categories
+    ? legacyBandLine
+    : feedBand === "muted"
+      ? `The ${categories.muteBasis} record is below the mute threshold and its claims no longer appear in the feed.`
+      : feedBand === "trusted"
+        ? `The ${categories.muteBasis} record sorts to the top of the feed.`
+        : feedBand === "unknown"
+          ? `The ${categories.muteBasis} record has too few adjudicated claims to judge; shown without a trust badge.`
+          : `The ${categories.muteBasis} record appears normally.`;
+
+  const categoryLine = categories
+    ? ` Reporting ${categories.reporting.hits}/${categories.reporting.misses} (${categories.reporting.band}), ` +
+      `forecast ${categories.forecast.hits}/${categories.forecast.misses} (${categories.forecast.band}). ` +
+      `The feed follows the ${categories.muteBasis} record.`
+    : "";
+
+  const body: Record<string, unknown> = {
+    kind: "score",
+    source_id: s.sourceId,
+    source_handle: s.sourceHandle,
+    version: s.version,
+    hits: score.hits,
+    misses: score.misses,
+    score: score.score,
+    hit_rate: score.hitRate,
+    band: score.band,
+    previous,
+    triggered_by_claim_id: s.triggeredByClaimId,
+    reason: s.reason,
+  };
+  if (categories) {
+    body.schema_version = 2;
+    body.mute_basis = categories.muteBasis;
+    body.categories = {
+      reporting: {
+        hits: categories.reporting.hits,
+        misses: categories.reporting.misses,
+        n: categories.reporting.n,
+        score: categories.reporting.score,
+        band: categories.reporting.band,
+      },
+      forecast: {
+        hits: categories.forecast.hits,
+        misses: categories.forecast.misses,
+        n: categories.forecast.n,
+        score: categories.forecast.score,
+        band: categories.forecast.band,
+      },
+    };
+  }
 
   return {
     key: `score:${s.sourceId}:v${s.version}`,
@@ -212,21 +284,8 @@ export function scoreMemory(
       `[SCORE] ${s.sourceHandle} is at trust v${s.version}: ${score.score.toFixed(2)} ` +
       `(${delta}; ${score.hits} hits / ${score.misses} misses, ` +
       `raw hit rate ${(score.hitRate * 100).toFixed(0)}%). ` +
-      `Trigger: ${s.reason}. ${bandLine}\n\n` +
-      payload({
-        kind: "score",
-        source_id: s.sourceId,
-        source_handle: s.sourceHandle,
-        version: s.version,
-        hits: score.hits,
-        misses: score.misses,
-        score: score.score,
-        hit_rate: score.hitRate,
-        band: score.band,
-        previous,
-        triggered_by_claim_id: s.triggeredByClaimId,
-        reason: s.reason,
-      }),
+      `Trigger: ${s.reason}. ${bandLine}${categoryLine}\n\n` +
+      payload(body),
   };
 }
 
