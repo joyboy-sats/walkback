@@ -33,6 +33,7 @@ import { writeMemoriesDurable, type MemoryWrite, type WriteObserver } from "./me
 import { claimMemory, sourceMemory } from "./memory-text";
 import { findPersistedKeys } from "./persisted-keys";
 import { claimIndexFromExternalId, planSeedPost, type SeedPostDecision } from "./seed-plan";
+import { storedPublishedAt } from "./post-time";
 import { getBalance } from "./tatum";
 import { NS } from "./types";
 import type {
@@ -58,8 +59,11 @@ export interface IngestInput {
   handle: string;
   platform: "x" | "substack" | "rss" | "onchain" | "other";
   text: string;
-  /** ISO timestamp the text was published. Anchors relative deadlines. */
-  publishedAt: string;
+  /**
+   * ISO timestamp the text was published. Null when the client did not send one.
+   * Extraction may still use a clock for relative deadlines; that clock is not stored.
+   */
+  publishedAt: string | null;
   /** Known address for the source; used to fill params.address when text omits it. */
   suiAddress?: string;
   displayName?: string;
@@ -216,12 +220,14 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
   });
 
   // ── 1. extract ────────────────────────────────────────────────────────────
+  const publishedAt = storedPublishedAt(input.publishedAt);
+  const extractAnchor = publishedAt?.toISOString() ?? new Date().toISOString();
   const extracted = input.claims
     ? input.claims
     : await extractClaims({
         handle: input.handle,
         ...(input.suiAddress ? { suiAddress: input.suiAddress } : {}),
-        publishedAt: input.publishedAt,
+        publishedAt: extractAnchor,
         text: input.text,
       });
 
@@ -273,7 +279,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
         synthetic,
         sourceUrl: input.sourceUrl ?? null,
         deadlineBasis: c.deadlineBasis ?? null,
-        publishedAt: new Date(input.publishedAt),
+        publishedAt,
       };
     });
     if (input.externalId) {
@@ -299,7 +305,7 @@ export async function ingest(input: IngestInput): Promise<IngestResult> {
           externalId: null,
           sourceUrl: input.sourceUrl ?? null,
           deadlineBasis: c.deadlineBasis ?? null,
-          publishedAt: new Date(input.publishedAt),
+          publishedAt,
           snapshot: snapshot as unknown as Record<string, unknown> | null,
           walrusBlobId: null,
         };
@@ -470,6 +476,7 @@ async function resumeSeedPost(
       .filter((index): index is number => index !== null),
   );
   const missing = [...pending].filter((index) => !have.has(index));
+  const publishedAt = storedPublishedAt(input.publishedAt);
   if (missing.length && input.claims) {
     const snapshot =
       "recordedSnapshot" in input ? (input.recordedSnapshot ?? null) : ((ledger.claims[0]?.snapshot as BalanceSnapshot | null) ?? null);
@@ -494,7 +501,7 @@ async function resumeSeedPost(
             synthetic: input.synthetic === true,
             sourceUrl: input.sourceUrl ?? null,
             deadlineBasis: c.deadlineBasis ?? null,
-            publishedAt: new Date(input.publishedAt),
+            publishedAt,
           };
         }),
       )
