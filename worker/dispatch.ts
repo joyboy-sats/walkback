@@ -5,6 +5,7 @@
  * before every write. This file is imported by the worker only.
  */
 import { ingest } from "../lib/ingest";
+import { publishedAtForIngest } from "../lib/post-time";
 import type { IngestBody } from "../lib/ingest-body";
 import type { ClaimedJob } from "../lib/job-queue";
 import { restoreNamespace } from "../lib/memwal";
@@ -39,7 +40,7 @@ export async function dispatchJob(job: ClaimedJob): Promise<unknown> {
         handle: body.handle,
         platform: body.platform,
         text: body.text,
-        publishedAt: body.publishedAt ?? new Date().toISOString(),
+        publishedAt: publishedAtForIngest(body.publishedAt),
         ...(body.suiAddress ? { suiAddress: body.suiAddress } : {}),
         ...(body.displayName ? { displayName: body.displayName } : {}),
         externalId: `job-${job.id}`,

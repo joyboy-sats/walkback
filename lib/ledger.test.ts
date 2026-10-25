@@ -129,6 +129,32 @@ describe("buildLedger", () => {
     expect(view.totals.visibleIncludesMuted).toBe(false);
   });
 
+  it("uses the forecast basis for two price misses and no reporting", () => {
+    const view = buildLedger({
+      sources: [
+        {
+          ...source({ id: "sui", handle: "suintern_", hits: 0, misses: 2 }),
+          reportingHits: 0,
+          reportingMisses: 0,
+          forecastHits: 0,
+          forecastMisses: 2,
+        },
+      ],
+      claims: [
+        { sourceId: "sui", claimType: "price_threshold", status: "resolved", outcome: "false" },
+        { sourceId: "sui", claimType: "price_threshold", status: "resolved", outcome: "false" },
+      ],
+      memoryInventory: 0,
+      latestVerifyResult: null,
+    });
+    const row = view.sources[0];
+    expect(row?.muteBasis).toBe("forecast");
+    expect(row?.band).toBe("unknown");
+    expect(row?.muted).toBe(false);
+    expect(row?.forecast).toMatchObject({ hits: 0, misses: 2, n: 2, band: "unknown" });
+    expect(row?.reporting).toMatchObject({ hits: 0, misses: 0, n: 0, band: "unknown" });
+  });
+
   it("keeps an under-sampled mute unrated and visible", () => {
     const view = buildLedger({
       sources: [source({ id: "sui", handle: "suintern_", hits: 0, misses: 2, storedMuted: true })],

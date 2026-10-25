@@ -202,8 +202,8 @@ function refinedPass(evidence: Record<string, unknown>): boolean {
 }
 
 function dataSource(evidence: Record<string, unknown>): TatumReference {
-  const symbol = text(evidence.symbol) ?? "SUI";
-  const quoteCcy = text(evidence.quote) ?? "USD";
+  const symbol = text(evidence.symbol) ?? "unknown";
+  const quoteCcy = text(evidence.quote) ?? "unknown";
   const interval = text(evidence.interval);
   const grain = interval ? `${interval} candles` : "candles";
   let label = `Tatum OHLCV ${symbol}/${quoteCcy}, ${grain}`;

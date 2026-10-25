@@ -21,6 +21,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { z } from "zod";
 import { boot } from "../backend/boot";
 import { ingestBody } from "../lib/ingest-body";
+import { publishedAtForIngest } from "../lib/post-time";
 import { enqueueJob, readJob } from "../lib/job-queue";
 import { corsHeaders, preflightStatus, tokenMatches } from "../lib/http-guard";
 import { claimsForSourceUrls, readClaim, readFeed, readLedger, readMemory, readSource } from "../lib/reads";
@@ -203,7 +204,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, cfg: Config): P
         const parsed = ingestBody.parse(raw);
         const id = await enqueueJob("ingest", {
           ...parsed,
-          publishedAt: parsed.publishedAt ?? new Date().toISOString(),
+          publishedAt: publishedAtForIngest(parsed.publishedAt),
         });
         send(res, 202, { jobId: id }, cors);
         return;

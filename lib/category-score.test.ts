@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { foldCategories, foldVerdicts, scoreCategory, tallyCategories } from "./category-score";
+import { foldCategories, foldVerdicts, muteBasisFor, scoreCategory, tallyCategories } from "./category-score";
 import { conditionWouldChange, scanConditionalClaims } from "./condition";
 import { wilsonLowerBound } from "./score";
 
@@ -49,6 +49,21 @@ describe("score categories", () => {
     expect(folded.forecast.band).toBe("trusted");
     expect(folded.muteBasis).toBe("forecast");
     expect(folded.muted).toBe(false);
+  });
+
+  it("keeps a forecast-only record of 0/2 on the forecast basis", () => {
+    const folded = foldCategories(
+      { reportingHits: 0, reportingMisses: 0, forecastHits: 0, forecastMisses: 2 },
+      0,
+      2,
+    );
+    expect(folded.reporting).toMatchObject({ hits: 0, misses: 0, n: 0, band: "unknown" });
+    expect(folded.forecast).toMatchObject({ hits: 0, misses: 2, n: 2, band: "unknown" });
+    expect(muteBasisFor(folded.forecast.n)).toBe("forecast");
+    expect(folded.muteBasis).toBe("forecast");
+    expect(folded.basis).toEqual(folded.forecast);
+    expect(folded.muted).toBe(false);
+    expect(muteBasisFor(0)).toBe("reporting");
   });
 
   it("leaves a short forecast record unrated instead of muted", () => {

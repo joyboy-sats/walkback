@@ -231,6 +231,30 @@ describe("presentClaim", () => {
     });
   });
 
+  it("does not assume SUI/USD when the evidence omits the pair", () => {
+    const view = presentClaim({
+      id: "c5b",
+      quote: "price call",
+      claimType: "price_threshold",
+      status: "resolved",
+      params: { direction: "gte", amount: "1", evaluation: "touch" },
+      deadline: "2026-07-31T00:00:00.000Z",
+      deadlineBasis: null,
+      claimBlobId: null,
+      resolution: {
+        outcome: "false",
+        reason: "short",
+        blobId: null,
+        evidence: { source: "tatum:ohlcv", interval: "1d" },
+      },
+    });
+    expect(view.tatum).toEqual({
+      kind: "data_source",
+      label: "Tatum OHLCV unknown/unknown, 1d candles",
+      requests: null,
+    });
+  });
+
   it("labels a refined touch without inventing batch bounds", () => {
     const view = presentClaim({
       id: "c6",

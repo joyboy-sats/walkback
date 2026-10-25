@@ -58,6 +58,22 @@ function load(): { byExternalId: Map<string, string>; bySourceUrl: Map<string, s
   return cached;
 }
 
+/**
+ * Timestamp to persist on `claims.published_at`.
+ * Missing or unparseable input is null. This never substitutes the current time.
+ */
+export function storedPublishedAt(value: string | null | undefined): Date | null {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+/** ISO form of {@link storedPublishedAt}, for a job payload. */
+export function publishedAtForIngest(value: string | null | undefined): string | null {
+  return storedPublishedAt(value)?.toISOString() ?? null;
+}
+
 /** ISO time from the seed file, or null when this claim is not in it. */
 export function seedPublishedAt(
   externalId: string | null | undefined,

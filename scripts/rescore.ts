@@ -39,7 +39,7 @@ if (!process.env.DATABASE_URL?.trim()) {
 const { and, asc, eq, isNull, sql } = await import("drizzle-orm");
 const { closeDb, getDb } = await import("../lib/db");
 const { claims, resolutions, sources } = await import("../lib/db/schema");
-const { foldVerdicts } = await import("../lib/category-score");
+const { foldVerdicts, muteBasisFor } = await import("../lib/category-score");
 const { seedPublishedAt } = await import("../lib/post-time");
 const { latestResolution } = await import("../lib/reads");
 const { advisoryLockKeys, claimResolveLockName } = await import("../lib/resolve-lock");
@@ -111,6 +111,10 @@ try {
         verdicts.push({ claimType: claim.claimType, outcome: resolution.outcome });
       }
       const folded = foldVerdicts(verdicts);
+      const basis = muteBasisFor(folded.forecast.n);
+      if (basis !== folded.muteBasis) {
+        throw new Error(`${source.handle}: mute basis ${folded.muteBasis} disagreed with muteBasisFor (${basis})`);
+      }
       await tx
         .update(sources)
         .set({

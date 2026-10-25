@@ -16,7 +16,7 @@
  * A source that has started forecasting is judged on forecasts alone: a strong
  * reporting record does not keep a bad forecaster in the feed, and one
  * reporting miss does not hide a good forecaster. n < 3 in the chosen
- * category is unrated, not muted.
+ * category has band `unknown`, not muted. The UI may say "Not yet rated".
  */
 import { computeScore, type ScoreSnapshot, type TrustBand } from "./score";
 import type { Outcome } from "./types";
@@ -152,10 +152,22 @@ export function tallyCategories(
   return counts;
 }
 
+/**
+ * Forecast-primary mute basis.
+ *
+ * Any true or false price verdict selects the forecast record, including when
+ * that record is still under 3 and its band is `unknown`. A band of `unknown`
+ * is not a reason to fall back to reporting. Reporting is the basis only when
+ * the forecast sample is empty.
+ */
+export function muteBasisFor(forecastAdjudicated: number): MuteBasis {
+  return forecastAdjudicated > 0 ? "forecast" : "reporting";
+}
+
 export function foldCategories(counts: CategoryCounts, overallHits: number, overallMisses: number): FoldedCategories {
   const reporting = categoryScore(counts.reportingHits, counts.reportingMisses);
   const forecast = categoryScore(counts.forecastHits, counts.forecastMisses);
-  const muteBasis: MuteBasis = forecast.n > 0 ? "forecast" : "reporting";
+  const muteBasis = muteBasisFor(forecast.n);
   const basis = muteBasis === "forecast" ? forecast : reporting;
   return {
     overall: categoryScore(overallHits, overallMisses),
