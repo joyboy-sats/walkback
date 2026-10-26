@@ -3,7 +3,6 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getTranslations } from "next-intl/server";
 import { BrandMark } from "@/components/brand-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -28,14 +27,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     { href: "/", label: t("feed") },
     { href: "/ingest", label: t("ingest") },
     { href: "/memory", label: t("memory") },
-    { href: "/methodology", label: t("methodology") },
   ];
 
   return (
     <html lang={locale}>
       <body className="min-h-dvh">
         <NextIntlClientProvider>
-          <TooltipProvider>
           <header className="sticky top-0 z-20 border-b border-line bg-surface-0/85 backdrop-blur-md">
             <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 sm:gap-3 sm:px-6">
               <a href="/" className="group flex shrink-0 items-center gap-2">
@@ -91,7 +88,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               <span className="sm:ml-auto">{footer("bound")}</span>
             </div>
           </footer>
-          </TooltipProvider>
         </NextIntlClientProvider>
       </body>
     </html>
