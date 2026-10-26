@@ -284,6 +284,11 @@ textarea:disabled,
   cursor: not-allowed;
 }
 
+/* A closed header menu must not leave its links in the layout. */
+header details:not([open]) > nav {
+  display: none;
+}
+
 button:disabled,
 input:disabled,
 select:disabled,
